@@ -1,0 +1,7 @@
+/* ============================================================
+   custom.css — ajustes propios sobre Bootstrap 5
+   Este archivo existe para que el frontend no dependa 100%
+   del CDN de Bootstrap; aquí van los estilos específicos del
+   IEEQ (colores institucionales, ajustes de la navbar, etc.)
+   conforme se vayan necesitando.
+   ============================================================ */

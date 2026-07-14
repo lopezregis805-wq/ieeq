@@ -1,0 +1,41 @@
+# ============================================================
+# .gitignore — IEEQ Registro
+# ============================================================
+
+# --- Credenciales y configuración local ---
+# NUNCA subir contraseñas reales. Este es justo el tipo de
+# archivo que causó el incidente de seguridad en ieeq_proyecto.
+.env
+*.env
+db_config.pl
+*.pem
+*.key
+
+# --- Evidencia y archivos subidos por usuarios ---
+# Fotos de INE, selfies, firmas, emblemas: son datos reales de
+# personas (sensibles) y además pesan mucho para un repo de Git.
+uploads/
+
+# --- Sesiones de CGI::Session ---
+/tmp/ieeq_sesiones/
+*.session
+
+# --- Respaldos de base de datos ---
+*.sql.bak
+*.dump
+*.sqldump
+
+# --- Perl ---
+*.log
+blib/
+Build
+_build/
+pm_to_blib
+*.bak
+
+# --- Editor / Sistema operativo ---
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
