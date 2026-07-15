@@ -2,16 +2,14 @@ package Bitacora;
 # ============================================================
 # Bitacora.pm — un solo lugar para escribir en la tabla bitacora.
 #
-# Regla del manual (8): "Toda alta, edición o eliminación queda
-# registrada en bitácora de forma automática e inalterable".
-# Si cada script insertara directamente con su propio SQL,
-# sería fácil que alguien olvidara hacerlo en un módulo nuevo.
-# Centralizarlo en una función hace que registrar quede "gratis"
-# con una sola línea: Bitacora::registrar(...)
+# Toda alta, edición o eliminación queda
+# registrada en bitácora de forma automática e inalterable.
+
 # ============================================================
 
 use strict;
 use warnings;
+use utf8;                            
 use Exporter 'import';
 
 our @EXPORT_OK = qw(registrar);

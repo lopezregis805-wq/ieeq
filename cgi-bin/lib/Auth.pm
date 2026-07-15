@@ -1,11 +1,9 @@
 package Auth;
 # ============================================================
-# Auth.pm — sesiones, login y verificación de permisos.
-#
-# Perl CGI no trae sesiones "de fábrica" como otros lenguajes.
+# 
 # Aquí usamos CGI::Session, que guarda cada sesión como un
 # archivo en el servidor y le entrega al navegador solo un ID
-# (cookie). Así replicamos el Diagrama 4 del manual:
+# (cookie):
 #   1. valida correo + contraseña (hash SHA-256)
 #   2. si son válidas, crea una sesión con id, nombre y rol
 #   3. si no, regresa error
@@ -17,7 +15,7 @@ use CGI::Session;
 use Digest::SHA qw(sha256_hex);
 use Exporter 'import';
 
-our @EXPORT_OK = qw(iniciar_sesion validar_credenciales requerir_sesion tiene_permiso cerrar_sesion);
+our @EXPORT_OK = qw(iniciar_sesion validar_credenciales requerir_sesion tiene_permiso cerrar_sesion guardar_texto_sesion obtener_texto_sesion);
 
 my $SESSION_DIR = '/tmp/ieeq_sesiones';
 mkdir $SESSION_DIR unless -d $SESSION_DIR;
@@ -54,7 +52,7 @@ sub validar_credenciales {
     return $usuario;                               # credenciales válidas
 }
 
-# Corta la ejecución con un 302 hacia login.pl si no hay sesión activa.
+# Corta la ejecución y redirige hacia login.pl si no hay sesión activa.
 # Se debe llamar al principio de CADA script protegido.
 sub requerir_sesion {
     my ($session, $cgi) = @_;
@@ -67,8 +65,7 @@ sub requerir_sesion {
 }
 
 # Revisa en permisos_usuario si el usuario tiene al menos $nivel_minimo
-# en el módulo indicado por su clave (ej. 'GESTION_ASOCIACIONES').
-# $nivel_minimo: 'LECTURA' o 'ESCRITURA'.
+
 sub tiene_permiso {
     my ($dbh, $id_usuario, $clave_modulo, $nivel_minimo) = @_;
 
@@ -91,6 +88,18 @@ sub cerrar_sesion {
     my ($session) = @_;
     $session->delete();
     $session->flush();
+}
+
+# Guarda un valor de texto (nombre, etc.) en la sesión.
+sub guardar_texto_sesion {
+    my ($session, $clave, $valor) = @_;
+    $session->param($clave, $valor);
+}
+
+# Recupera un valor de texto previamente guardado con guardar_texto_sesion.
+sub obtener_texto_sesion {
+    my ($session, $clave) = @_;
+    return $session->param($clave);
 }
 
 1;
