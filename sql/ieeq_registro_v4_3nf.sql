@@ -73,9 +73,6 @@ CREATE TABLE asociaciones_politicas (
     id_asociacion          INT AUTO_INCREMENT PRIMARY KEY,
     nombre                 VARCHAR(200) NOT NULL,
     representante_legal    VARCHAR(200) NOT NULL,
-    -- Domicilio (se deja como texto: el manual no restringe el
-    -- domicilio de la asociación a los 18 municipios, a diferencia
-    -- del lugar de afiliación, que sí es un dominio cerrado)
     calle                  VARCHAR(200),
     numero                 VARCHAR(20),
     colonia                VARCHAR(150),
@@ -83,18 +80,12 @@ CREATE TABLE asociaciones_politicas (
     codigo_postal          VARCHAR(10),
     correo_electronico     VARCHAR(150),
     telefono               VARCHAR(15),
-    emblema                VARCHAR(255),  -- ruta al JPG, máx 1 MB (regla de negocio, se valida en la app)
+    emblema                VARCHAR(255),
     fecha_aprobacion       DATE,
-    fecha_perdida_registro DATE,          -- [regla] obligatoria solo si estatus = SIN_REGISTRO
+    fecha_perdida_registro DATE,
     estatus                ENUM('VIGENTE','SIN_REGISTRO') NOT NULL DEFAULT 'VIGENTE',
     fecha_creacion         DATETIME NOT NULL DEFAULT NOW(),
     fecha_actualizacion    DATETIME NULL ON UPDATE NOW(),
-
-    -- [regla de negocio 8]: si el estatus es SIN_REGISTRO, la fecha
-    -- de pérdida de registro es obligatoria. Un CHECK no puede
-    -- comparar contra otro campo de forma condicional de manera
-    -- 100% portable en MySQL, así que esta regla también se valida
-    -- en la aplicación (Perl), pero dejamos el CHECK como respaldo.
     CONSTRAINT chk_fecha_perdida CHECK (
         estatus = 'VIGENTE' OR fecha_perdida_registro IS NOT NULL
     )
@@ -105,39 +96,30 @@ CREATE TABLE asociaciones_politicas (
 -- ============================================================
 CREATE TABLE padron_electoral (
     id_padron         INT AUTO_INCREMENT PRIMARY KEY,
-    total_padron      BIGINT NOT NULL,                          -- soporta millones
+    total_padron      BIGINT NOT NULL,
     fecha_corte       DATE NOT NULL,
-    porcentaje_minimo DECIMAL(6,4) NOT NULL DEFAULT 0.1300,      -- 0.13 (%), no 0.0013
+    porcentaje_minimo DECIMAL(6,4) NOT NULL DEFAULT 0.1300,
     activo            TINYINT(1) NOT NULL DEFAULT 1,
     fecha_registro    DATETIME NOT NULL DEFAULT NOW()
 );
--- Nota de negocio: solo debe existir un registro con activo=1 a la
--- vez. Esto se controla en la aplicación (al insertar uno nuevo,
--- se desactivan los anteriores dentro de una misma transacción).
 
 -- ============================================================
 -- TABLA: usuarios
--- Roles: SUPERADMIN, ADMIN_ASOCIACION, FUNCIONARIO_IEEQ, AUXILIAR
--- [fix] se agrega ADMIN_ASOCIACION, que faltaba en la v3 y que
--- el manual sí describe como rol independiente (sección 2).
 -- ============================================================
 CREATE TABLE usuarios (
     id_usuario           INT AUTO_INCREMENT PRIMARY KEY,
     correo_electronico   VARCHAR(150) UNIQUE NOT NULL,
-    contrasena           VARCHAR(255) NOT NULL,   -- hash SHA-256 (RF: Diagrama 4)
+    contrasena           VARCHAR(255) NOT NULL,
     nombre               VARCHAR(100) NOT NULL,
     apellido_paterno     VARCHAR(100) NOT NULL,
     apellido_materno     VARCHAR(100),
     telefono_movil       VARCHAR(15),
     tipo_usuario         ENUM('SUPERADMIN','ADMIN_ASOCIACION','FUNCIONARIO_IEEQ','AUXILIAR') NOT NULL,
-    id_asociacion        INT NULL,                -- obligatorio para ADMIN_ASOCIACION y AUXILIAR
+    id_asociacion        INT NULL,
     activo               TINYINT(1) NOT NULL DEFAULT 1,
     fecha_creacion       DATETIME NOT NULL DEFAULT NOW(),
     fecha_actualizacion  DATETIME NULL ON UPDATE NOW(),
     FOREIGN KEY (id_asociacion) REFERENCES asociaciones_politicas(id_asociacion),
-
-    -- [regla] SUPERADMIN y FUNCIONARIO_IEEQ no pertenecen a una
-    -- asociación; ADMIN_ASOCIACION y AUXILIAR sí.
     CONSTRAINT chk_usuario_asociacion CHECK (
         (tipo_usuario IN ('SUPERADMIN','FUNCIONARIO_IEEQ') AND id_asociacion IS NULL)
         OR
@@ -146,10 +128,7 @@ CREATE TABLE usuarios (
 );
 
 -- ============================================================
--- TABLA: permisos_usuario  (ya estaba bien normalizada en v3)
--- Relación muchos-a-muchos usuario x módulo, con un atributo
--- propio (nivel). Este es el patrón correcto para "permisos
--- variables por usuario y por módulo" que pide el manual (sección 6).
+-- TABLA: permisos_usuario
 -- ============================================================
 CREATE TABLE permisos_usuario (
     id_permiso   INT AUTO_INCREMENT PRIMARY KEY,
@@ -163,53 +142,38 @@ CREATE TABLE permisos_usuario (
 
 -- ============================================================
 -- TABLA: afiliaciones (RF-03)
--- [fix 1] se elimina id_asociacion (dependencia transitiva vía
---         id_registrador -> usuarios.id_asociacion). Se obtiene
---         siempre por JOIN, nunca se duplica.
--- [fix 2] se elimina situacion_padron (dato redundante: ya vive
---         en verificaciones_afiliaciones).
 -- ============================================================
 CREATE TABLE afiliaciones (
     id_afiliacion            INT AUTO_INCREMENT PRIMARY KEY,
-
     fecha_hora_afiliacion     DATETIME NOT NULL DEFAULT NOW(),
-    id_municipio_afiliacion   INT NOT NULL,          -- dominio cerrado: 18 municipios
-
+    id_municipio_afiliacion   INT NOT NULL,
     nombre                    VARCHAR(100) NOT NULL,
     apellido_paterno          VARCHAR(100) NOT NULL,
     apellido_materno          VARCHAR(100),
-
     domicilio_calle           VARCHAR(200),
     domicilio_numero          VARCHAR(20),
     domicilio_colonia         VARCHAR(150),
     domicilio_municipio       VARCHAR(100),
     domicilio_estado          VARCHAR(100),
     domicilio_cp              VARCHAR(10),
-
     clave_elector             VARCHAR(18),
     ocr                       VARCHAR(18),
     cic                       VARCHAR(18),
-
     foto_anverso_ine          VARCHAR(255),
     foto_reverso_ine          VARCHAR(255),
     foto_persona              VARCHAR(255),
     firma                     VARCHAR(255),
-
     acepta_afiliacion_libre   TINYINT(1) NOT NULL DEFAULT 0,
     acepta_documentos         TINYINT(1) NOT NULL DEFAULT 0,
     acepta_no_otro_partido    TINYINT(1) NOT NULL DEFAULT 0,
     acepta_aviso_privacidad   TINYINT(1) NOT NULL DEFAULT 0,
-
-    -- Ciclo de vida (Diagrama 9): 1=Nueva, 2=En revisión, 3=Verificado
     estatus                   ENUM('NUEVA','EN_REVISION','VERIFICADO') NOT NULL DEFAULT 'NUEVA',
-
-    id_registrador            INT NOT NULL,   -- de aquí se deduce la asociación (JOIN a usuarios)
+    id_registrador            INT NOT NULL,
     fecha_creacion            DATETIME NOT NULL DEFAULT NOW(),
     fecha_actualizacion       DATETIME NULL ON UPDATE NOW(),
-    fecha_eliminacion         DATETIME NULL,  -- soft delete
+    fecha_eliminacion         DATETIME NULL,
     id_usuario_actualizacion  INT NULL,
     id_usuario_eliminacion    INT NULL,
-
     FOREIGN KEY (id_municipio_afiliacion) REFERENCES municipios(id_municipio),
     FOREIGN KEY (id_registrador)          REFERENCES usuarios(id_usuario),
     FOREIGN KEY (id_usuario_actualizacion) REFERENCES usuarios(id_usuario),
@@ -218,15 +182,12 @@ CREATE TABLE afiliaciones (
 
 -- ============================================================
 -- TABLA: verificaciones_afiliaciones (RF-04)
--- Aquí vive la "situación" real de cada verificación: quién,
--- cuándo, qué decidió y por qué. Nada de esto se repite en
--- afiliaciones.
 -- ============================================================
 CREATE TABLE verificaciones_afiliaciones (
     id_verificacion    INT AUTO_INCREMENT PRIMARY KEY,
     id_afiliacion      INT NOT NULL,
     id_verificador     INT NOT NULL,
-    decision           ENUM('APROBADO','RECHAZADO','EN_REVISION') NOT NULL,
+    decision           ENUM('APROBADO','RECHAZADO') NOT NULL,
     observaciones      TEXT,
     fecha_verificacion DATETIME NOT NULL DEFAULT NOW(),
     FOREIGN KEY (id_afiliacion)  REFERENCES afiliaciones(id_afiliacion),
@@ -235,10 +196,6 @@ CREATE TABLE verificaciones_afiliaciones (
 
 -- ============================================================
 -- TABLA: bitacora (RF-06)
--- [fix 3] modulo ahora es id_modulo (FK), no texto libre.
--- [fix]   referencia se elimina: era una copia de clave_elector
---         que ya existe en afiliaciones; si se necesita, se
---         obtiene por JOIN usando id_registro_afectado.
 -- ============================================================
 CREATE TABLE bitacora (
     id_log               INT AUTO_INCREMENT PRIMARY KEY,
@@ -260,10 +217,6 @@ CREATE TABLE bitacora (
     FOREIGN KEY (id_usuario) REFERENCES usuarios(id_usuario) ON DELETE SET NULL,
     FOREIGN KEY (id_modulo)  REFERENCES modulos_sistema(id_modulo)
 );
--- Nota: la bitácora "no puede modificarse ni eliminarse" (regla 8
--- del manual). Eso se garantiza revocando UPDATE/DELETE a nivel de
--- usuario de MySQL de la aplicación, no solo con buenas intenciones
--- en el código Perl. Lo veremos en la sección de permisos de MySQL.
 
 -- ============================================================
 -- ÍNDICES
@@ -279,11 +232,7 @@ CREATE INDEX idx_usuarios_asociacion      ON usuarios(id_asociacion);
 
 -- ============================================================
 -- VISTAS
--- Aquí "recuperamos" con JOIN lo que ya no duplicamos en tablas.
 -- ============================================================
-
--- Vista principal de afiliaciones: junta todo lo que antes estaba
--- duplicado (asociación, última verificación) mediante JOIN.
 CREATE OR REPLACE VIEW vw_afiliaciones_reporte AS
 SELECT
     a.id_afiliacion,
@@ -295,10 +244,10 @@ SELECT
     m.nombre AS municipio_afiliacion,
     a.estatus,
     a.fecha_hora_afiliacion AS fecha_registro,
-    u.id_asociacion,                              -- [fix 1] deducido, no duplicado
+    u.id_asociacion,
     ap.nombre AS asociacion,
     CONCAT(u.nombre, ' ', u.apellido_paterno) AS registrador,
-    v.decision       AS ultima_decision,           -- [fix 2] deducido, no duplicado
+    v.decision       AS ultima_decision,
     v.observaciones  AS ultima_observacion,
     v.fecha_verificacion
 FROM afiliaciones a
@@ -313,8 +262,6 @@ LEFT JOIN verificaciones_afiliaciones v
       )
 WHERE a.fecha_eliminacion IS NULL;
 
--- Vista de bitácora legible (aquí sí conviene "aplanar" con texto,
--- porque es solo para lectura humana, no para almacenar el dato).
 CREATE OR REPLACE VIEW vw_bitacora_detalle AS
 SELECT
     b.id_log,
@@ -331,14 +278,13 @@ LEFT JOIN usuarios u        ON u.id_usuario = b.id_usuario
 LEFT JOIN modulos_sistema ms ON ms.id_modulo = b.id_modulo
 ORDER BY b.fecha DESC;
 
--- Vista de estadísticas por asociación (cumplimiento de padrón)
 CREATE OR REPLACE VIEW vw_estadisticas_afiliaciones AS
 SELECT
     ap.id_asociacion,
     ap.nombre AS asociacion,
-    pe.total_padron,
-    pe.porcentaje_minimo,
-    ROUND(pe.total_padron * (pe.porcentaje_minimo / 100)) AS minimo_requerido,
+    MAX(pe.total_padron) AS total_padron,
+    MAX(pe.porcentaje_minimo) AS porcentaje_minimo,
+    ROUND(MAX(pe.total_padron) * (MAX(pe.porcentaje_minimo) / 100)) AS minimo_requerido,
     COUNT(a.id_afiliacion) AS total_afiliaciones,
     SUM(a.estatus = 'VERIFICADO')  AS verificadas,
     SUM(a.estatus = 'EN_REVISION') AS en_revision,
@@ -347,36 +293,13 @@ FROM asociaciones_politicas ap
 LEFT JOIN usuarios u   ON u.id_asociacion = ap.id_asociacion
 LEFT JOIN afiliaciones a ON a.id_registrador = u.id_usuario AND a.fecha_eliminacion IS NULL
 CROSS JOIN (SELECT * FROM padron_electoral WHERE activo = 1 LIMIT 1) pe
-GROUP BY ap.id_asociacion;
+GROUP BY ap.id_asociacion, ap.nombre;
 
 -- ============================================================
 -- TRIGGERS
 -- ============================================================
 DELIMITER //
 
--- Bitácora automática al cambiar el estatus de una afiliación
-CREATE TRIGGER trg_bitacora_cambio_estatus_afiliacion
-AFTER UPDATE ON afiliaciones
-FOR EACH ROW
-BEGIN
-    IF NEW.estatus != OLD.estatus THEN
-        INSERT INTO bitacora(id_usuario, accion, id_modulo, id_registro_afectado, detalles)
-        VALUES(
-            NEW.id_usuario_actualizacion,
-            CASE NEW.estatus
-                WHEN 'VERIFICADO'  THEN 'APROBACION'
-                WHEN 'EN_REVISION' THEN 'REGISTRO'
-                ELSE 'EDICION'
-            END,
-            (SELECT id_modulo FROM modulos_sistema WHERE clave = 'VERIFICACION_AFILIACIONES'),
-            NEW.id_afiliacion,
-            CONCAT('Cambio de estatus: ', OLD.estatus, ' -> ', NEW.estatus,
-                   ' | ', NEW.nombre, ' ', NEW.apellido_paterno)
-        );
-    END IF;
-END //
-
--- Protege afiliaciones verificadas contra eliminación física
 CREATE TRIGGER trg_proteger_afiliacion_verificada
 BEFORE DELETE ON afiliaciones
 FOR EACH ROW
@@ -387,7 +310,6 @@ BEGIN
     END IF;
 END //
 
--- Solo se puede editar mientras el estatus sea NUEVA (regla de negocio)
 CREATE TRIGGER trg_validar_edicion_afiliacion
 BEFORE UPDATE ON afiliaciones
 FOR EACH ROW
@@ -407,14 +329,41 @@ DELIMITER ;
 -- ============================================================
 DELIMITER //
 
+CREATE PROCEDURE sp_enviar_a_revision(
+    IN p_id_afiliacion INT,
+    IN p_id_usuario    INT
+)
+BEGIN
+    DECLARE v_estatus ENUM('NUEVA','EN_REVISION','VERIFICADO');
+
+    SELECT estatus INTO v_estatus FROM afiliaciones WHERE id_afiliacion = p_id_afiliacion;
+
+    IF v_estatus IS NULL THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'La afiliacion no existe';
+    ELSEIF v_estatus != 'NUEVA' THEN
+        SIGNAL SQLSTATE '45000'
+        SET MESSAGE_TEXT = 'Solo se puede enviar a revision una afiliacion en estatus Nueva afiliacion';
+    END IF;
+
+    UPDATE afiliaciones
+    SET estatus = 'EN_REVISION', id_usuario_actualizacion = p_id_usuario
+    WHERE id_afiliacion = p_id_afiliacion;
+
+    INSERT INTO bitacora(id_usuario, accion, id_modulo, id_registro_afectado, detalles)
+    VALUES(p_id_usuario, 'EDICION',
+           (SELECT id_modulo FROM modulos_sistema WHERE clave = 'CONSULTA_AFILIACIONES'),
+           p_id_afiliacion, 'Afiliacion enviada a revision (Nueva -> En revision)');
+END //
+
 CREATE PROCEDURE sp_verificar_afiliacion(
     IN p_id_afiliacion  INT,
     IN p_id_verificador INT,
-    IN p_decision       ENUM('APROBADO','RECHAZADO','EN_REVISION'),
+    IN p_decision       ENUM('APROBADO','RECHAZADO'),
     IN p_observaciones  TEXT
 )
 BEGIN
     DECLARE v_estatus ENUM('NUEVA','EN_REVISION','VERIFICADO');
+    DECLARE v_estatus_nuevo ENUM('NUEVA','EN_REVISION','VERIFICADO');
 
     DECLARE EXIT HANDLER FOR SQLEXCEPTION
     BEGIN
@@ -422,21 +371,31 @@ BEGIN
         RESIGNAL;
     END;
 
+    SELECT estatus INTO v_estatus FROM afiliaciones WHERE id_afiliacion = p_id_afiliacion;
+
+    IF v_estatus IS NULL THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'La afiliacion no existe';
+    ELSEIF v_estatus != 'EN_REVISION' THEN
+        SIGNAL SQLSTATE '45000'
+        SET MESSAGE_TEXT = 'Solo se pueden verificar afiliaciones que esten En revision';
+    END IF;
+
     START TRANSACTION;
 
-    SET v_estatus = CASE p_decision
-        WHEN 'APROBADO'    THEN 'VERIFICADO'
-        WHEN 'RECHAZADO'   THEN 'NUEVA'
-        WHEN 'EN_REVISION' THEN 'EN_REVISION'
-    END;
+    SET v_estatus_nuevo = IF(p_decision = 'APROBADO', 'VERIFICADO', 'NUEVA');
 
     UPDATE afiliaciones
-    SET estatus = v_estatus,
+    SET estatus = v_estatus_nuevo,
         id_usuario_actualizacion = p_id_verificador
     WHERE id_afiliacion = p_id_afiliacion;
 
     INSERT INTO verificaciones_afiliaciones (id_afiliacion, id_verificador, decision, observaciones)
     VALUES (p_id_afiliacion, p_id_verificador, p_decision, p_observaciones);
+
+    INSERT INTO bitacora(id_usuario, accion, id_modulo, id_registro_afectado, detalles)
+    VALUES(p_id_verificador, IF(p_decision = 'APROBADO', 'APROBACION', 'RECHAZO'),
+           (SELECT id_modulo FROM modulos_sistema WHERE clave = 'VERIFICACION_AFILIACIONES'),
+           p_id_afiliacion, CONCAT('Decision: ', p_decision, IFNULL(CONCAT(' - ', p_observaciones), '')));
 
     COMMIT;
 END //
@@ -484,7 +443,6 @@ INSERT INTO asociaciones_politicas (
 INSERT INTO padron_electoral (total_padron, fecha_corte, porcentaje_minimo)
 VALUES (1500000, '2024-12-31', 0.1300);
 
--- Contraseña de todos: "12345678"
 INSERT INTO usuarios (correo_electronico, contrasena, nombre, apellido_paterno, apellido_materno, tipo_usuario, id_asociacion, activo) VALUES
 ('admin@ieeq.mx',           SHA2('12345678',256), 'Juan',      'Administrador','García',  'SUPERADMIN',       NULL, 1),
 ('maria.func@ieeq.mx',      SHA2('12345678',256), 'María Elena','Funcionaria', 'López',   'FUNCIONARIO_IEEQ', NULL, 1),
@@ -492,11 +450,9 @@ INSERT INTO usuarios (correo_electronico, contrasena, nombre, apellido_paterno, 
 ('pedro.aux@nuevorumbo.mx', SHA2('12345678',256), 'Pedro',     'Auxiliar',     'Vargas',  'AUXILIAR',         1,    1),
 ('laura.aux@nuevorumbo.mx', SHA2('12345678',256), 'Laura',     'Auxiliar',     'Cruz',    'AUXILIAR',         1,    1);
 
--- Permisos: SUPERADMIN con ESCRITURA en todo
 INSERT INTO permisos_usuario (id_usuario, id_modulo, nivel)
 SELECT 1, id_modulo, 'ESCRITURA' FROM modulos_sistema;
 
--- Funcionario IEEQ: lectura general + escritura en verificación y cédulas
 INSERT INTO permisos_usuario (id_usuario, id_modulo, nivel)
 SELECT 2, id_modulo,
        CASE clave
@@ -504,22 +460,20 @@ SELECT 2, id_modulo,
            WHEN 'CEDULAS_AFILIACION'        THEN 'ESCRITURA'
            WHEN 'GESTION_USUARIOS'          THEN 'NINGUNO'
            WHEN 'GESTION_PERMISOS'          THEN 'NINGUNO'
+           WHEN 'REGISTRO_AFILIACIONES'     THEN 'NINGUNO'
            ELSE 'LECTURA'
        END
 FROM modulos_sistema;
 
--- Admin de asociación: escritura en su asociación, usuarios y auxiliares
 INSERT INTO permisos_usuario (id_usuario, id_modulo, nivel)
 SELECT 3, id_modulo,
        CASE clave
-           WHEN 'GESTION_PERMISOS' THEN 'NINGUNO'
            WHEN 'PADRON_ELECTORAL' THEN 'LECTURA'
            WHEN 'VERIFICACION_AFILIACIONES' THEN 'NINGUNO'
            ELSE 'ESCRITURA'
        END
 FROM modulos_sistema;
 
--- Auxiliares: escritura en afiliaciones, lectura en consulta
 INSERT INTO permisos_usuario (id_usuario, id_modulo, nivel)
 SELECT id_usuario, id_modulo,
        CASE clave
@@ -530,7 +484,6 @@ SELECT id_usuario, id_modulo,
 FROM modulos_sistema
 CROSS JOIN (SELECT id_usuario FROM usuarios WHERE tipo_usuario='AUXILIAR') aux;
 
--- Afiliaciones de prueba
 INSERT INTO afiliaciones (
     id_municipio_afiliacion, nombre, apellido_paterno, apellido_materno,
     domicilio_calle, domicilio_numero, domicilio_colonia, domicilio_municipio, domicilio_estado, domicilio_cp,
@@ -552,8 +505,7 @@ INSERT INTO afiliaciones (
  1,1,1,1,'NUEVA',5);
 
 INSERT INTO verificaciones_afiliaciones (id_afiliacion, id_verificador, decision, observaciones) VALUES
-(1, 2, 'APROBADO',   'Documentación completa y verificada.'),
-(2, 2, 'EN_REVISION','Credencial con datos borrosos, requiere nueva fotografía.');
+(1, 2, 'APROBADO', 'Documentación completa y verificada.');
 
 INSERT INTO bitacora (id_usuario, accion, id_modulo, id_registro_afectado, detalles, ip_origen) VALUES
 (1, 'CREACION_USUARIO', (SELECT id_modulo FROM modulos_sistema WHERE clave='GESTION_USUARIOS'), 3, 'Usuario admin.rumbo@nuevorumbo.mx creado', '192.168.1.1'),
