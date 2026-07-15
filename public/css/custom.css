@@ -1,7 +1,190 @@
 /* ============================================================
-   custom.css — ajustes propios sobre Bootstrap 5
-   Este archivo existe para que el frontend no dependa 100%
-   del CDN de Bootstrap; aquí van los estilos específicos del
-   IEEQ (colores institucionales, ajustes de la navbar, etc.)
-   conforme se vayan necesitando.
+   custom.css — tokens de diseño IEEQ (tomados del Figma Make
+   del proyecto: src/styles/theme.css)
    ============================================================ */
+
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&display=swap');
+
+:root {
+    --ieeq-primary:       #6B2D8B;
+    --ieeq-primary-dark:  #4a1f61;
+    --ieeq-primary-light: #EFE3F6;
+    --ieeq-bg:            #f4f6f9;
+    --ieeq-sidebar:       #6B2D8B;
+    --ieeq-login-grad-a:  #9b2781;
+    --ieeq-login-grad-b:  #6e1759;
+    --ieeq-radius:        0.75rem;
+}
+
+body {
+    font-family: 'Outfit', system-ui, -apple-system, sans-serif;
+    background-color: var(--ieeq-bg);
+}
+
+h1, h2, h3, h4, h5, h6, label, .btn { font-family: 'Outfit', system-ui, sans-serif; font-weight: 600; }
+
+/* --- Botones y elementos con el morado institucional --- */
+.btn-primary {
+    background-color: var(--ieeq-primary);
+    border-color: var(--ieeq-primary);
+}
+.btn-primary:hover, .btn-primary:focus {
+    background-color: var(--ieeq-primary-dark);
+    border-color: var(--ieeq-primary-dark);
+}
+.text-ieeq-primary { color: var(--ieeq-primary); }
+.bg-ieeq-primary   { background-color: var(--ieeq-primary); }
+
+.card, .btn, .form-control, .form-select, .alert, .badge {
+    border-radius: var(--ieeq-radius);
+}
+
+/* --- Layout con sidebar (ver Plantilla.pm) --- */
+.ieeq-sidebar {
+    background-color: var(--ieeq-sidebar);
+    color: #fff;
+    width: 260px;
+    flex-shrink: 0;
+    position: sticky;
+    top: 0;
+    height: 100vh;
+    overflow: hidden;
+    z-index: 1030;
+    transition: transform 0.3s ease;
+}
+.ieeq-sidebar > .d-flex,
+.ieeq-sidebar > .small,
+.ieeq-sidebar > .ieeq-usuario-card {
+    flex-shrink: 0;
+}
+.ieeq-sidebar nav.nav {
+    flex: 1 1 auto;
+    flex-wrap: nowrap;
+    min-height: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(255,255,255,0.25) transparent;
+}
+.ieeq-sidebar nav.nav::-webkit-scrollbar { width: 6px; }
+.ieeq-sidebar nav.nav::-webkit-scrollbar-thumb {
+    background-color: rgba(255,255,255,0.25);
+    border-radius: 3px;
+}
+
+.ieeq-sidebar .nav-link {
+    color: rgba(255,255,255,0.85);
+    border-radius: var(--ieeq-radius);
+    padding: 0.6rem 1rem;
+    margin-bottom: 0.25rem;
+    display: flex;
+    align-items: center;
+    transition: background-color 0.15s ease, color 0.15s ease;
+}
+.ieeq-sidebar .nav-link i {
+    width: 1.5rem;
+    text-align: center;
+    flex-shrink: 0;
+}
+.ieeq-sidebar .nav-link:hover {
+    background-color: rgba(255,255,255,0.12);
+    color: #fff;
+}
+.ieeq-sidebar .nav-link.active {
+    background-color: rgba(255,255,255,0.18);
+    color: #fff;
+    font-weight: 600;
+    box-shadow: inset 3px 0 0 #fff;
+}
+.ieeq-sidebar .menu-titulo {
+    color: rgba(255,255,255,0.6);
+    font-size: 0.75rem;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    padding: 0 1rem;
+}
+.ieeq-usuario-card {
+    background-color: rgba(255,255,255,0.08);
+    border-radius: var(--ieeq-radius);
+    padding: 0.75rem 1rem;
+}
+
+/* --- Sidebar en móvil/tablet: se convierte en panel deslizante --- */
+.ieeq-sidebar-toggle {
+    display: none;
+    border: none;
+    background: transparent;
+    font-size: 1.4rem;
+    color: var(--ieeq-primary);
+    padding: 0.25rem 0.5rem;
+    line-height: 1;
+}
+.ieeq-sidebar-backdrop {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background-color: rgba(0,0,0,0.5);
+    z-index: 1020;
+}
+.ieeq-sidebar-backdrop.show {
+    display: block;
+}
+@media (max-width: 991.98px) {
+    .ieeq-sidebar-toggle {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+    }
+    .ieeq-sidebar {
+        position: fixed;
+        top: 0;
+        left: 0;
+        transform: translateX(-100%);
+        box-shadow: 4px 0 24px rgba(0,0,0,0.25);
+    }
+    .ieeq-sidebar.show {
+        transform: translateX(0);
+    }
+}
+
+/* --- Tarjetas de estadísticas del dashboard --- */
+.ieeq-stat-card {
+    border-radius: var(--ieeq-radius);
+    color: #fff;
+    padding: 1.25rem;
+}
+.ieeq-stat-card.morado  { background-color: var(--ieeq-primary); }
+.ieeq-stat-card.naranja { background-color: #fd7e14; }
+.ieeq-stat-card.verde   { background-color: #198754; }
+.ieeq-stat-card.rojo    { background-color: #dc3545; }
+.ieeq-stat-card.azul    { background-color: #0d6efd; }
+
+/* --- Pantalla de login: panel izquierdo con degradado --- */
+.ieeq-login-panel {
+    background: linear-gradient(160deg, var(--ieeq-login-grad-a), var(--ieeq-login-grad-b));
+    color: #fff;
+    min-height: 100vh;
+}
+.ieeq-login-icono {
+    width: 84px; height: 84px;
+    background-color: rgba(255,255,255,0.15);
+    border-radius: var(--ieeq-radius);
+    display: flex; align-items: center; justify-content: center;
+}
+
+/* --- Listado de afiliaciones: avatar de iniciales y flujo --- */
+.ieeq-avatar {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 32px; height: 32px; border-radius: 50%;
+    color: #fff; font-size: 0.75rem; font-weight: 700; flex-shrink: 0;
+}
+.ieeq-avatar.morado  { background-color: var(--ieeq-primary); }
+.ieeq-avatar.azul    { background-color: #0d6efd; }
+.ieeq-avatar.verde   { background-color: #198754; }
+.ieeq-avatar.naranja { background-color: #fd7e14; }
+.ieeq-avatar.rojo    { background-color: #dc3545; }
+
+.ieeq-dot {
+    display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+    margin-right: 3px;
+}
