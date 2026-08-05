@@ -185,8 +185,8 @@ sub mostrar_cedula {
     <table class="table table-sm">
       <tr><td class="text-muted" style="width:220px;">Nombre completo</td><td>$r->{nombre} $r->{apellido_paterno} @{[ $r->{apellido_materno} // '' ]}</td></tr>
       <tr><td class="text-muted">Clave de elector</td><td>@{[ $r->{clave_elector} // '—' ]}</td></tr>
-      <tr><td class="text-muted">OCR / CIC</td><td>@{[ $r->{ocr} // '—' ]} / @{[ $r->{cic} // '—' ]}</td></tr>
-      <tr><td class="text-muted">Domicilio</td><td>@{[ $r->{domicilio_calle} // '' ]} @{[ $r->{domicilio_numero} // '' ]}, @{[ $r->{domicilio_colonia} // '' ]}, @{[ $r->{domicilio_municipio} // '' ]}, @{[ $r->{domicilio_estado} // '' ]}</td></tr>
+      <tr><td class="text-muted">OCR</td><td>@{[ $r->{ocr} // '—' ]}</td></tr>
+      <tr><td class="text-muted">Domicilio</td><td>@{[ $r->{domicilio_calle} // '' ]} @{[ $r->{domicilio_numero} // '' ]}@{[ $r->{domicilio_numero_interior} ? " Int. $r->{domicilio_numero_interior}" : '' ]}, @{[ $r->{domicilio_colonia} // '' ]}, @{[ $r->{domicilio_municipio} // '' ]}, @{[ $r->{domicilio_estado} // '' ]}</td></tr>
       <tr><td class="text-muted">Municipio de afiliación</td><td>$r->{municipio}</td></tr>
       <tr><td class="text-muted">Fecha de afiliación</td><td>$r->{fecha_hora_afiliacion}</td></tr>
       <tr><td class="text-muted">Fecha de verificación</td><td>@{[ $r->{fecha_verificacion} // '—' ]}</td></tr>

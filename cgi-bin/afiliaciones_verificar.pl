@@ -168,8 +168,8 @@ sub mostrar_pantalla_decision {
           <h5 class="mb-3">$r->{nombre} $r->{apellido_paterno} @{[ $r->{apellido_materno} // '' ]}</h5>
           <table class="table table-sm mb-0">
             <tr><td class="text-muted">Clave de elector</td><td>@{[ $r->{clave_elector} // '—' ]}</td></tr>
-            <tr><td class="text-muted">OCR / CIC</td><td>@{[ $r->{ocr} // '—' ]} / @{[ $r->{cic} // '—' ]}</td></tr>
-            <tr><td class="text-muted">Domicilio</td><td>@{[ $r->{domicilio_calle} // '—' ]} @{[ $r->{domicilio_numero} // '' ]}, @{[ $r->{domicilio_colonia} // '' ]}, @{[ $r->{domicilio_municipio} // '' ]}</td></tr>
+            <tr><td class="text-muted">OCR</td><td>@{[ $r->{ocr} // '—' ]}</td></tr>
+            <tr><td class="text-muted">Domicilio</td><td>@{[ $r->{domicilio_calle} // '—' ]} @{[ $r->{domicilio_numero} // '' ]}@{[ $r->{domicilio_numero_interior} ? " Int. $r->{domicilio_numero_interior}" : '' ]}, @{[ $r->{domicilio_colonia} // '' ]}, @{[ $r->{domicilio_municipio} // '' ]}</td></tr>
             <tr><td class="text-muted">Municipio de afiliación</td><td>$r->{municipio}</td></tr>
             <tr><td class="text-muted">Asociación</td><td>$r->{asociacion}</td></tr>
             <tr><td class="text-muted">Registrado por</td><td>$r->{registrador}</td></tr>

@@ -9,6 +9,7 @@ use strict;
 use warnings;
 use utf8;                            # el codigo fuente de este archivo esta en UTF-8
 use CGI;
+use CGI::Carp qw(fatalsToBrowser); # TEMPORAL: para ver el error real, quitar después
 use lib './lib';
 use DB qw(conectar);
 use Auth qw(iniciar_sesion validar_credenciales);
@@ -72,30 +73,51 @@ print <<"HTML";
     <p class="opacity-75">Sistema de Registro de Afiliaciones</p>
   </div>
 
-  <div class="col-lg-7 d-flex align-items-center justify-content-center bg-white p-5">
+  <main class="col-lg-7 d-flex align-items-center justify-content-center bg-white p-5">
     <div style="max-width:420px; width:100%;">
       <h2 class="fw-bold text-ieeq-primary mb-1">Iniciar Sesión</h2>
       <p class="text-muted mb-4">Accede con tus credenciales institucionales</p>
 HTML
 
-print qq(<div class="alert alert-danger">$error</div>) if $error;
+print qq(<div class="alert alert-danger" role="alert" id="error-login">$error</div>) if $error;
+
+my $aria_error = $error ? 'aria-describedby="error-login" aria-invalid="true"' : '';
 
 print <<"HTML";
       <form method="post" action="login.pl">
         <div class="mb-3">
-          <label class="form-label">Correo electrónico</label>
-          <input type="email" name="correo" class="form-control" placeholder="usuario\@dominio.mx" required autofocus>
+          <label for="correo" class="form-label">Correo electrónico</label>
+          <input type="email" id="correo" name="correo" class="form-control" placeholder="usuario\@dominio.mx" autocomplete="email" required autofocus $aria_error>
         </div>
         <div class="mb-3">
-          <label class="form-label">Contraseña</label>
-          <input type="password" name="contrasena" class="form-control" placeholder="********" required>
+          <label for="contrasena" class="form-label">Contraseña</label>
+          <div class="input-group">
+            <input type="password" id="contrasena" name="contrasena" class="form-control" placeholder="********" autocomplete="current-password" required $aria_error>
+            <button class="btn btn-outline-secondary" type="button" id="btn_mostrar_contrasena" aria-label="Mostrar contraseña" aria-pressed="false">
+              <i class="bi bi-eye" id="icono_mostrar_contrasena" aria-hidden="true"></i>
+            </button>
+          </div>
         </div>
         <button type="submit" class="btn btn-primary w-100 py-2">Entrar al Sistema</button>
       </form>
     </div>
-  </div>
+  </main>
 
 </div>
+<script>
+  (function() {
+    const boton = document.getElementById('btn_mostrar_contrasena');
+    const campo = document.getElementById('contrasena');
+    const icono = document.getElementById('icono_mostrar_contrasena');
+    boton.addEventListener('click', function() {
+      const mostrando_texto = campo.type === 'text';
+      campo.type = mostrando_texto ? 'password' : 'text';
+      boton.setAttribute('aria-pressed', String(!mostrando_texto));
+      boton.setAttribute('aria-label', mostrando_texto ? 'Mostrar contraseña' : 'Ocultar contraseña');
+      icono.className = mostrando_texto ? 'bi bi-eye' : 'bi bi-eye-slash';
+    });
+  })();
+</script>
 </body>
 </html>
 HTML
