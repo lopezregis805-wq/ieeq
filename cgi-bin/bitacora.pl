@@ -40,13 +40,24 @@ unless (tiene_permiso($dbh, $id_usuario, 'BITACORA_AUDITORIA', 'LECTURA')) {
 my $filtro_accion = $cgi->param('accion_filtro') // '';
 my $desde = $cgi->param('desde') // '';
 my $hasta = $cgi->param('hasta') // '';
+# la bitácora ya no se muestra automáticamente al entrar: se espera a
+# que la persona elija sus parámetros y presione "Mostrar registros".
+# El campo oculto "buscar" solo viaja cuando el formulario de filtros
+# se envió al menos una vez (aunque se dejen los filtros en blanco).
+my $buscar = $cgi->param('buscar') ? 1 : 0;
 
 print encabezado(titulo => 'Bitácora y Auditoría',
                   usuario_nombre => obtener_texto_sesion($session, 'nombre'), rol => $rol,
                   dbh => $dbh, id_usuario => $id_usuario, pagina_actual => 'BITACORA_AUDITORIA');
 
 mostrar_filtros($filtro_accion, $desde, $hasta);
-mostrar_bitacora($dbh, $rol, $id_asociacion, $filtro_accion, $desde, $hasta);
+if ($buscar) {
+    mostrar_bitacora($dbh, $rol, $id_asociacion, $filtro_accion, $desde, $hasta);
+} else {
+    print '<div class="card border-0 shadow-sm"><div class="card-body text-center text-muted py-5">'
+        . 'Selecciona los filtros que necesites (o déjalos en blanco para ver todo) y presiona '
+        . '<strong>"Mostrar registros"</strong> para desplegar la bitácora.</div></div>';
+}
 
 print pie_pagina();
 
@@ -64,6 +75,7 @@ sub mostrar_filtros {
     print qq(
     <form method="get" action="bitacora.pl" class="card border-0 shadow-sm mb-4">
       <div class="card-body">
+        <input type="hidden" name="buscar" value="1">
         <div class="row g-3 align-items-end">
           <div class="col-md-3">
             <label class="form-label">Tipo de acción</label>
@@ -78,7 +90,7 @@ sub mostrar_filtros {
             <input class="form-control" type="date" name="hasta" value="$hasta">
           </div>
           <div class="col-md-3">
-            <button type="submit" class="btn btn-primary w-100"><i class="bi bi-funnel me-1"></i>Filtrar</button>
+            <button type="submit" class="btn btn-primary w-100"><i class="bi bi-funnel me-1"></i>Mostrar registros</button>
           </div>
         </div>
       </div>

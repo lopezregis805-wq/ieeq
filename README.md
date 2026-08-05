@@ -11,12 +11,14 @@ Stack: **Perl / CGI**, **MySQL 8+**, **Bootstrap 5**, sin frameworks de frontend
 ```
 ieeq-registro/
 ├── sql/
-│   └── ieeq_registro_v4_3nf.sql   ← base de datos completa (3FN), autocontenida
+│   ├── ieeq_registro_v4_3nf.sql   ← versión anterior (histórico, no usar para instalar)
+│   └── ieeq_registro_v5.sql       ← base de datos completa (3FN), autocontenida — usar esta
 ├── cgi-bin/
 │   ├── lib/
 │   │   ├── DB.pm         ← conexión a MySQL (lee credenciales de variables de entorno)
 │   │   ├── Auth.pm       ← login, sesiones, permisos, codificación UTF-8 de sesión
 │   │   ├── Bitacora.pm   ← registrar() centralizado
+│   │   ├── Rutas.pm      ← ruta base para archivos subidos (fotos, firmas, emblemas)
 │   │   └── Plantilla.pm  ← encabezado()/pie_pagina(): sidebar dinámico según permisos
 │   ├── login.pl
 │   ├── logout.pl
@@ -43,9 +45,23 @@ Los 10 módulos del Diagrama 3 del manual están completos.
 
 ## 2. Base de datos: 3FN
 
-`ieeq_registro_v4_3nf.sql` es un script **autocontenido**: crea la base desde cero
+`ieeq_registro_v5.sql` es un script **autocontenido**: crea la base desde cero
 (`DROP DATABASE IF EXISTS` + `CREATE DATABASE`), sus tablas, vistas, triggers,
 procedimientos almacenados y datos de prueba. No necesita ningún parche adicional.
+
+Cambios de v5 respecto a v4 (reglas de negocio de Registro de Afiliaciones,
+manual sección 8):
+
+- `afiliaciones.domicilio_numero_interior` — columna nueva; `domicilio_numero`
+  pasa a interpretarse como número exterior.
+- Clave de elector y OCR ahora son obligatorios al capturar una afiliación
+  (se valida en `afiliaciones_nueva.pl`, no se agregó `NOT NULL` en el
+  esquema para no romper capturas ya existentes en bases reales).
+- El campo Código CIC ya no se pide en el formulario; la columna `cic` se
+  conserva porque otras pantallas todavía la muestran de forma readonly.
+- El domicilio siempre se registra en el estado de Querétaro — el campo ya
+  no es editable en el formulario.
+- Todo el texto capturado en el formulario se guarda en mayúsculas.
 
 Correcciones de normalización respecto a un diseño ingenuo (ver comentarios `[fix]`
 dentro del propio archivo):
@@ -97,9 +113,11 @@ Los permisos reales se guardan en `permisos_usuario` (nivel `ESCRITURA` /
   `ADMIN_ASOCIACION` solo puede editar la suya.
 - `FUNCIONARIO_IEEQ` no tiene ningún acceso a Registro de Afiliaciones
   ("sin alta ni edición de afiliaciones", manual sección 2).
-- Un Auxiliar nunca puede recibir permisos de Gestión de Usuarios ni Gestión
-  de Permisos, aunque el Admin de su asociación lo intente desde `permisos.pl`
-  (se bloquea también del lado del servidor, no solo en el HTML).
+- Un Auxiliar solo puede recibir Escritura/Lectura en Registro de Afiliaciones
+  y Lectura en Consulta y Gestión del Listado; cualquier otro módulo queda
+  bloqueado (forzado a `NINGUNO`), aunque el Admin de su asociación lo intente
+  desde `permisos.pl` — se bloquea también del lado del servidor, no solo en
+  el HTML.
 
 El sidebar (`Plantilla::encabezado`) se construye dinámicamente a partir de
 estos permisos: un módulo en `NINGUNO` ni siquiera aparece en el menú.
@@ -115,9 +133,13 @@ estos permisos: un módulo en `NINGUNO` ni siquiera aparece en el menú.
   firma; usa un `<canvas>` (dibujo con mouse o touch) y manda el resultado como
   PNG en base64 (`MIME::Base64`), tal como lo describe el manual, sección 5.4
   ("firma capturada en pantalla").
-- **Rutas de archivos subidos**: se calculan con `FindBin ($Bin)`, nunca con
-  una ruta fija — así el proyecto funciona sin importar en qué carpeta lo
-  despliegues.
+- **Rutas de archivos subidos**: `Rutas.pm` expone `$RUTA_UPLOADS`, que por
+  defecto usa `FindBin ($Bin)` pero se puede sobreescribir con la variable de
+  entorno `IEEQ_RUTA_UPLOADS`. Es necesario en servidores donde el
+  `DocumentRoot` de Apache es un symlink hacia otra ruta real: `FindBin`
+  resuelve symlinks, así que `$Bin` puede no coincidir con la carpeta que
+  Apache realmente sirve. Si no defines la variable, el comportamiento es
+  igual que antes (usa `$Bin`).
 - **Vistas**: `vw_afiliaciones_reporte`, `vw_bitacora_detalle` y
   `vw_estadisticas_afiliaciones` existen para no repetir `JOIN`s en cada
   script. Las columnas de `vw_estadisticas_afiliaciones` que vienen de una
@@ -132,7 +154,7 @@ estos permisos: un módulo en `NINGUNO` ni siquiera aparece en el menú.
 
 ```bash
 # 1. Base de datos (un solo comando, ya trae todo)
-mysql -u root -p < sql/ieeq_registro_v4_3nf.sql
+mysql -u root -p < sql/ieeq_registro_v5.sql
 
 # 2. Módulos Perl necesarios
 sudo apt install libdbi-perl libdbd-mysql-perl libcgi-pm-perl libcgi-session-perl
@@ -207,7 +229,7 @@ Antes de compartir el repo o hacer un despliegue nuevo, conviene comprobar
 que el script realmente es autocontenido:
 
 ```bash
-mysql -u root -p < sql/ieeq_registro_v4_3nf.sql
+mysql -u root -p < sql/ieeq_registro_v5.sql
 mysql -u root -p -e "SHOW PROCEDURE STATUS WHERE Db='ieeq_registro';"
 mysql -u root -p -e "SELECT * FROM ieeq_registro.vw_estadisticas_afiliaciones;"
 ```

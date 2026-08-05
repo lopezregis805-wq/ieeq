@@ -36,10 +36,15 @@ unless (tiene_permiso($dbh, $id_usuario, 'GESTION_PERMISOS', 'LECTURA')) {
 }
 my $puede_escribir = tiene_permiso($dbh, $id_usuario, 'GESTION_PERMISOS', 'ESCRITURA');
 
-# Módulos que un Admin de Asociación NUNCA puede asignarle a un
-# Auxiliar, aunque tenga escritura en este módulo (evita que un
-# auxiliar se autogestione usuarios o permisos).
-my %modulos_bloqueados_para_auxiliar = map { $_ => 1 } qw(GESTION_USUARIOS GESTION_PERMISOS);
+# Módulos que un Auxiliar SÍ puede recibir, y los niveles que se
+# le pueden otorgar en cada uno. Cualquier módulo que no aparezca
+# aquí queda bloqueado (forzado a NINGUNO) para un Auxiliar, igual
+# que ya pasaba con Gestión de Usuarios y Gestión de Permisos —
+# evita que un auxiliar termine con más poder del que le corresponde.
+my %niveles_permitidos_para_auxiliar = (
+    REGISTRO_AFILIACIONES => [qw(ESCRITURA LECTURA NINGUNO)],
+    CONSULTA_AFILIACIONES => [qw(LECTURA NINGUNO)],
+);
 
 # --- ¿puede $rol_sesion editar los permisos de $usuario_objetivo? ---
 sub puede_editar_permisos_de {
@@ -74,6 +79,12 @@ print pie_pagina();
 # ============================================================
 sub mostrar_listado {
     my ($dbh, $rol_sesion, $id_asociacion_sesion) = @_;
+
+    if ($cgi->param('guardado')) {
+        my $usuario_guardado = $cgi->escapeHTML($cgi->param('usuario') // '');
+        my $detalle = length($usuario_guardado) ? " de $usuario_guardado" : '';
+        print qq(<div class="alert alert-success">Permisos$detalle actualizados correctamente.</div>);
+    }
 
     my $sql = 'SELECT u.id_usuario, u.nombre, u.apellido_paterno, u.correo_electronico, u.tipo_usuario,
                       ap.nombre AS asociacion
@@ -132,6 +143,10 @@ sub mostrar_edicion {
 
     my $es_auxiliar_ajeno_bloqueo = ($usuario_objetivo->{tipo_usuario} eq 'AUXILIAR'); # aplica el bloqueo de módulos
 
+    if ($cgi->param('error')) {
+        print '<div class="alert alert-danger">No se pudieron guardar los permisos. Intenta de nuevo; si el problema continúa, avisa al administrador del sistema.</div>';
+    }
+
     my $sth_mod = $dbh->prepare(
         'SELECT m.id_modulo, m.clave, m.descripcion, IFNULL(p.nivel, "NINGUNO") AS nivel
          FROM modulos_sistema m
@@ -157,7 +172,8 @@ sub mostrar_edicion {
     );
 
     while (my $m = $sth_mod->fetchrow_hashref) {
-        my $bloqueado = $es_auxiliar_ajeno_bloqueo && $modulos_bloqueados_para_auxiliar{ $m->{clave} };
+        my $niveles_permitidos = $niveles_permitidos_para_auxiliar{ $m->{clave} };
+        my $bloqueado = $es_auxiliar_ajeno_bloqueo && !$niveles_permitidos;
         my $disabled = ($puede_escribir && !$bloqueado) ? '' : 'disabled';
 
         print qq(<tr><td>$m->{descripcion}</td><td>);
@@ -165,8 +181,9 @@ sub mostrar_edicion {
             print qq(<span class="badge bg-secondary-subtle text-secondary-emphasis">Ninguno (no permitido para Auxiliares)</span>
                      <input type="hidden" name="nivel_$m->{id_modulo}" value="NINGUNO">);
         } else {
+            my @niveles = ($es_auxiliar_ajeno_bloqueo ? @$niveles_permitidos : qw(ESCRITURA LECTURA NINGUNO));
             print qq(<select class="form-select form-select-sm" name="nivel_$m->{id_modulo}" $disabled>);
-            for my $nivel (qw(ESCRITURA LECTURA NINGUNO)) {
+            for my $nivel (@niveles) {
                 my $sel = ($m->{nivel} eq $nivel) ? 'selected' : '';
                 print qq(<option value="$nivel" $sel>$nivel</option>);
             }
@@ -208,19 +225,36 @@ sub guardar_permisos {
          ON DUPLICATE KEY UPDATE nivel = VALUES(nivel)'
     );
 
-    while (my ($id_modulo, $clave) = $sth_mod->fetchrow_array) {
-        my $nivel = $cgi->param("nivel_$id_modulo") // 'NINGUNO';
-        $nivel = 'NINGUNO' unless grep { $_ eq $nivel } qw(ESCRITURA LECTURA NINGUNO);
-        # nunca confiar solo en el disabled del HTML: se vuelve a
-        # forzar aquí el bloqueo de módulos para Auxiliares
-        $nivel = 'NINGUNO' if $es_auxiliar && $modulos_bloqueados_para_auxiliar{$clave};
-        $sth_upsert->execute($id_objetivo, $id_modulo, $nivel);
+    my $guardado_ok = eval {
+        while (my ($id_modulo, $clave) = $sth_mod->fetchrow_array) {
+            my $nivel = $cgi->param("nivel_$id_modulo") // 'NINGUNO';
+            $nivel = 'NINGUNO' unless grep { $_ eq $nivel } qw(ESCRITURA LECTURA NINGUNO);
+            # nunca confiar solo en el disabled/las opciones del HTML: se
+            # vuelve a forzar aquí el nivel máximo permitido para Auxiliares
+            if ($es_auxiliar) {
+                my $niveles_permitidos = $niveles_permitidos_para_auxiliar{$clave};
+                $nivel = 'NINGUNO' unless $niveles_permitidos && grep { $_ eq $nivel } @$niveles_permitidos;
+            }
+            $sth_upsert->execute($id_objetivo, $id_modulo, $nivel);
+        }
+
+        registrar(dbh => $dbh, id_usuario => $id_usuario, accion => 'PERMISO_ASIGNADO',
+                  clave_modulo => 'GESTION_PERMISOS', id_registro_afectado => $id_objetivo,
+                  detalles => "Permisos actualizados para $usuario_objetivo->{correo_electronico}",
+                  ip => $cgi->remote_addr);
+        1;
+    };
+
+    # si algo falló (ej. la base de datos rechazó un valor), se lo
+    # avisamos al usuario en vez de dejar que la petición truene con un
+    # error 500 sin explicación
+    # al guardar con éxito se regresa al listado (con la confirmación
+    # visible ahí); si algo falla, se regresa a la misma pantalla de
+    # edición para que se pueda corregir e intentar de nuevo
+    if ($guardado_ok) {
+        my $nombre_completo = "$usuario_objetivo->{nombre} $usuario_objetivo->{apellido_paterno}";
+        print $cgi->redirect("permisos.pl?guardado=1&usuario=" . $cgi->escape($nombre_completo));
+    } else {
+        print $cgi->redirect("permisos.pl?id=$id_objetivo&error=1");
     }
-
-    registrar(dbh => $dbh, id_usuario => $id_usuario, accion => 'PERMISO_ASIGNADO',
-              clave_modulo => 'GESTION_PERMISOS', id_registro_afectado => $id_objetivo,
-              detalles => "Permisos actualizados para $usuario_objetivo->{correo_electronico}",
-              ip => $cgi->remote_addr);
-
-    print $cgi->redirect("permisos.pl?id=$id_objetivo");
 }

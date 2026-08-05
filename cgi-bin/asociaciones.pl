@@ -21,9 +21,9 @@ use strict;
 use warnings;
 use utf8;                            # el codigo fuente de este archivo esta en UTF-8
 use CGI;
-use FindBin qw($Bin);
 use lib './lib';
 use DB qw(conectar);
+use Rutas qw($RUTA_UPLOADS);
 use Auth qw(iniciar_sesion requerir_sesion tiene_permiso obtener_texto_sesion);
 use Bitacora qw(registrar);
 use Plantilla qw(encabezado pie_pagina);
@@ -115,7 +115,7 @@ if ($accion eq 'guardar' && $cgi->request_method eq 'POST') {
         } else {
             my $nombre_archivo = "asociacion_" . ($id // 'nueva') . "_" . time() . ".jpg";
             $ruta_emblema = "uploads/emblemas/$nombre_archivo";
-            open(my $fh, '>', "$Bin/$ruta_emblema")
+            open(my $fh, '>', "$RUTA_UPLOADS/$ruta_emblema")
                 or push @errores, "No se pudo guardar el emblema: $!";
             if (!@errores) {
                 binmode $fh;
