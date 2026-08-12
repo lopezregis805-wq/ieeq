@@ -7,19 +7,18 @@
 # misma estructura de 5 pasos:
 #   1. sesión + permiso
 #   2. leer acción (listar / nuevo / guardar / editar)
-#   3. validar reglas de negocio del manual
+#   3. validar reglas de negocio y parámetros recibidos
 #   4. ejecutar el SQL correspondiente
 #   5. registrar en bitácora y mostrar HTML
 #
-# Reglas de negocio de esta pantalla (manual, Diagrama 5 y
-# regla crítica de la sección 8):
+# Reglas de negocio de esta pantalla:
 #   - la fecha de pérdida de registro es obligatoria SOLO si
 #     el estatus se marca como "Sin registro"
 #   - el emblema debe ser JPG y no superar 1 MB
 # ============================================================
 use strict;
 use warnings;
-use utf8;                            # el codigo fuente de este archivo esta en UTF-8
+use utf8;                            
 use CGI;
 use lib './lib';
 use DB qw(conectar);
@@ -52,8 +51,9 @@ sub puede_editar_asociacion {
 # igual lo validamos: nunca hay que confiar solo en que el menú
 # "no lo muestre".
 unless (tiene_permiso($dbh, $id_usuario, 'GESTION_ASOCIACIONES', 'LECTURA')) {
-    print $cgi->header(-charset => 'utf-8', -status => '403 Forbidden');
-    print "Acceso no autorizado a este módulo.";
+    denegar_acceso(titulo => 'Gestión de Asociaciones', usuario_nombre => obtener_texto_sesion($session, 'nombre'),
+                    rol => $rol_sesion, dbh => $dbh, id_usuario => $id_usuario, pagina_actual => 'GESTION_ASOCIACIONES',
+                    mensaje => 'Acceso no autorizado a este módulo.');
     exit;
 }
 
@@ -71,10 +71,11 @@ if ($accion eq 'guardar' && $cgi->request_method eq 'POST') {
         : ($rol_sesion eq 'SUPERADMIN');
 
     unless ($autorizado) {
-        print $cgi->header(-charset => 'utf-8', -status => '403 Forbidden');
-        print $id_objetivo
-            ? "Solo puedes editar la información de tu propia asociación."
-            : "Solo el Administrador del Sistema puede dar de alta nuevas asociaciones.";
+        denegar_acceso(titulo => 'Gestión de Asociaciones', usuario_nombre => obtener_texto_sesion($session, 'nombre'),
+                        rol => $rol_sesion, dbh => $dbh, id_usuario => $id_usuario, pagina_actual => 'GESTION_ASOCIACIONES',
+                        mensaje => ($id_objetivo
+                            ? 'Solo puedes editar la información de tu propia asociación.'
+                            : 'Solo el Administrador del Sistema puede dar de alta nuevas asociaciones.'));
         exit;
     }
 
@@ -171,15 +172,17 @@ if ($accion eq 'guardar' && $cgi->request_method eq 'POST') {
 
 # --- Paso 4 y 5: construir la vista ---------------------------
 if ($accion eq 'nuevo' && $rol_sesion ne 'SUPERADMIN') {
-    print $cgi->header(-charset => 'utf-8', -status => '403 Forbidden');
-    print "Solo el Administrador del Sistema puede dar de alta nuevas asociaciones.";
+    denegar_acceso(titulo => 'Gestión de Asociaciones', usuario_nombre => obtener_texto_sesion($session, 'nombre'),
+                    rol => $rol_sesion, dbh => $dbh, id_usuario => $id_usuario, pagina_actual => 'GESTION_ASOCIACIONES',
+                    mensaje => 'Solo el Administrador del Sistema puede dar de alta nuevas asociaciones.');
     exit;
 }
 if ($accion eq 'editar') {
     my $id_objetivo = $cgi->param('id') || $cgi->param('id_asociacion');
     unless (puede_editar_asociacion($rol_sesion, $id_asociacion_sesion, $id_objetivo)) {
-        print $cgi->header(-charset => 'utf-8', -status => '403 Forbidden');
-        print "Solo puedes editar la información de tu propia asociación.";
+        denegar_acceso(titulo => 'Gestión de Asociaciones', usuario_nombre => obtener_texto_sesion($session, 'nombre'),
+                        rol => $rol_sesion, dbh => $dbh, id_usuario => $id_usuario, pagina_actual => 'GESTION_ASOCIACIONES',
+                        mensaje => 'Solo puedes editar la información de tu propia asociación.');
         exit;
     }
 }

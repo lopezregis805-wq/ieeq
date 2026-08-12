@@ -8,7 +8,7 @@ use warnings;
 use utf8;                           
 use Exporter 'import';
 
-our @EXPORT_OK = qw(encabezado pie_pagina);
+our @EXPORT_OK = qw(encabezado pie_pagina denegar_acceso);
 
 # Mapa clave_modulo -> {enlace, icono, etiqueta}. Un solo lugar
 # para mantener el orden y los textos del menú.
@@ -104,6 +104,18 @@ HTML
 HTML
 
     return $html;
+}
+
+# denegar_acceso(): pantalla homologada para "no tienes acceso" en
+# toda la aplicación. Antes cada script imprimía texto plano sin
+# encabezado (se perdía el menú por completo); ahora se ve igual
+# que cualquier otra alerta de la aplicación, con el menú de siempre.
+sub denegar_acceso {
+    my (%args) = @_;
+    my $mensaje = delete $args{mensaje} // 'No tienes acceso a esta sección.';
+    print encabezado(%args);
+    print qq(<div class="alert alert-danger">$mensaje</div>);
+    print pie_pagina();
 }
 
 sub pie_pagina {

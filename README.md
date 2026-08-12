@@ -1,8 +1,7 @@
 # IEEQ · Sistema de Registro de Afiliaciones
 
-Sistema web para el Instituto Electoral del Estado de Querétaro: captura, verificación
-y gestión de afiliaciones ciudadanas a asociaciones políticas estatales, construido
-según la Especificación de Requerimientos de Software (manual del proyecto).
+Sistema web para captura, verificación y gestión de afiliaciones ciudadanas a
+asociaciones políticas estatales.
 
 Stack: **Perl / CGI**, **MySQL 8+**, **Bootstrap 5**, sin frameworks de frontend.
 
@@ -19,7 +18,8 @@ ieeq-registro/
 │   │   ├── Auth.pm       ← login, sesiones, permisos, codificación UTF-8 de sesión
 │   │   ├── Bitacora.pm   ← registrar() centralizado
 │   │   ├── Rutas.pm      ← ruta base para archivos subidos (fotos, firmas, emblemas)
-│   │   └── Plantilla.pm  ← encabezado()/pie_pagina(): sidebar dinámico según permisos
+│   │   └── Plantilla.pm  ← encabezado()/pie_pagina()/denegar_acceso(): sidebar dinámico
+│   │                        y pantalla homologada de acceso denegado
 │   ├── login.pl
 │   ├── logout.pl
 │   ├── dashboard.pl              ← panel distinto por rol (tarjetas, alertas, avance)
@@ -32,7 +32,7 @@ ieeq-registro/
 │   ├── afiliaciones_detalle.pl   ← Detalle de solo lectura (con evidencia fotográfica)
 │   ├── afiliaciones_verificar.pl ← Verificación de Afiliaciones
 │   ├── cedulas.pl                ← Generación de Cédulas de Afiliación (vista imprimible)
-│   └── bitacora.pl               ← Bitácora y Auditoría (solo lectura)
+│   └── bitacora.pl               ← Bitácora y Auditoría (solo lectura, bajo demanda)
 ├── public/
 │   ├── css/custom.css    ← tokens de diseño IEEQ (colores, tipografía Outfit)
 │   └── js/sidebar.js     ← botón hamburguesa para el sidebar en móvil
@@ -41,7 +41,9 @@ ieeq-registro/
 └── README.md
 ```
 
-Los 10 módulos del Diagrama 3 del manual están completos.
+Diez módulos, cada uno con su propio script: dashboard, asociaciones, usuarios,
+permisos, padrón electoral, registro de afiliaciones, listado, verificación,
+cédulas y bitácora.
 
 ## 2. Base de datos: 3FN
 
@@ -49,48 +51,46 @@ Los 10 módulos del Diagrama 3 del manual están completos.
 (`DROP DATABASE IF EXISTS` + `CREATE DATABASE`), sus tablas, vistas, triggers,
 procedimientos almacenados y datos de prueba. No necesita ningún parche adicional.
 
-Cambios de v5 respecto a v4 (reglas de negocio de Registro de Afiliaciones,
-manual sección 8):
+Puntos de diseño relevantes del esquema:
 
-- `afiliaciones.domicilio_numero_interior` — columna nueva; `domicilio_numero`
-  pasa a interpretarse como número exterior.
-- Clave de elector y OCR ahora son obligatorios al capturar una afiliación
-  (se valida en `afiliaciones_nueva.pl`, no se agregó `NOT NULL` en el
-  esquema para no romper capturas ya existentes en bases reales).
-- El campo Código CIC ya no se pide en el formulario; la columna `cic` se
-  conserva porque otras pantallas todavía la muestran de forma readonly.
-- El domicilio siempre se registra en el estado de Querétaro — el campo ya
-  no es editable en el formulario.
-- Todo el texto capturado en el formulario se guarda en mayúsculas.
+- `afiliaciones.id_asociacion` no existe como columna — es una dependencia
+  transitiva (se deduce de `id_registrador` → `usuarios.id_asociacion`); se
+  obtiene siempre por `JOIN`, nunca se duplica.
+- No existe una tabla `situacion_padron` en `afiliaciones`: ese dato vive
+  únicamente en `verificaciones_afiliaciones`, para no duplicarlo.
+- `bitacora.id_modulo` es una FK a `modulos_sistema`, no texto libre — evita
+  inconsistencias de nombres de módulo entre registros.
+- Una Persona Auxiliar es un `usuario` con `tipo_usuario = 'AUXILIAR'`; no hay
+  una tabla `auxiliares` aparte duplicando la entidad "persona".
+- `afiliaciones.domicilio_numero` es el número exterior; existe además
+  `domicilio_numero_interior` (opcional) para departamentos o interiores.
+- Clave de elector y OCR son obligatorios al capturar una afiliación (se
+  valida en `afiliaciones_nueva.pl`; la columna no lleva `NOT NULL` en el
+  esquema para no romper capturas ya existentes en bases reales). La clave de
+  elector debe tener exactamente 18 caracteres alfanuméricos.
+- El campo Código CIC ya no se pide en el formulario de captura; la columna
+  `cic` se conserva únicamente para no perder el dato de capturas anteriores.
+- El domicilio siempre se registra en el estado de Querétaro — el campo no es
+  editable en el formulario, y todo el texto capturado se guarda en mayúsculas.
 
-Correcciones de normalización respecto a un diseño ingenuo (ver comentarios `[fix]`
-dentro del propio archivo):
+**Ciclo de vida de una afiliación:** cuatro estatus — `NUEVA`, `EN_REVISION`,
+`VERIFICADO` y `RECHAZADA`. Las transiciones pasan siempre por procedimientos
+almacenados, nunca por `UPDATE` directo desde la aplicación:
 
-1. `afiliaciones.id_asociacion` se eliminó — era una dependencia transitiva
-   (se deducía de `id_registrador` → `usuarios.id_asociacion`); ahora se obtiene
-   siempre por `JOIN`, nunca se duplica.
-2. `afiliaciones.situacion_padron` se eliminó — duplicaba lo que ya vive en
-   `verificaciones_afiliaciones`.
-3. `bitacora.modulo` pasó de texto libre a `id_modulo` (FK a `modulos_sistema`).
-4. Se eliminó una tabla `auxiliares` paralela a `usuarios` que duplicaba la
-   entidad "persona" completa. Una Persona Auxiliar es un `usuario` con
-   `tipo_usuario = 'AUXILIAR'`, no una entidad aparte.
-5. Se agregó el rol `ADMIN_ASOCIACION`, que el manual describe (sección 2) pero
-   que no existía como rol independiente en un primer borrador.
-
-**Ciclo de vida de una afiliación** (Diagrama 9 del manual): solo existen 3
-estatus — `NUEVA`, `EN_REVISION`, `VERIFICADO`. Un rechazo no es un cuarto
-estatus: regresa el registro a `NUEVA` para que se corrija y se vuelva a enviar.
-Las transiciones pasan por procedimientos almacenados, nunca por `UPDATE`
-directo desde la aplicación:
-
-- `sp_enviar_a_revision(id_afiliacion, id_usuario)` — Nueva → En revisión
-  (lo ejecuta la asociación: auxiliar o admin).
+- `sp_enviar_a_revision(id_afiliacion, id_usuario)` — Nueva o Rechazada →
+  En revisión (lo ejecuta la asociación: auxiliar o administrador).
 - `sp_verificar_afiliacion(id_afiliacion, id_verificador, decision, observaciones)`
-  — En revisión → Verificado (Aprobado) o → Nueva (Rechazado). Solo lo ejecuta
-  el Funcionariado IEEQ.
+  — En revisión → Verificado (Aprobado) o → Rechazada (Rechazado). Solo lo
+  ejecuta el Funcionariado IEEQ.
 - `sp_eliminar_afiliacion(id_afiliacion, id_usuario)` — soft delete, solo si
-  el estatus es Nueva.
+  el estatus es Nueva o Rechazada.
+
+Una afiliación rechazada queda en su propio estatus (ya no se confunde con una
+recién capturada) pero sigue siendo editable: la asociación corrige lo que
+falló y vuelve a enviarla a revisión con `sp_enviar_a_revision`. El trigger
+`trg_validar_edicion_afiliacion` refuerza del lado de la base de datos que solo
+se puede editar el nombre/apellido de un registro en estatus Nueva o Rechazada;
+`trg_proteger_afiliacion_verificada` impide borrar un registro ya Verificado.
 
 Cada procedimiento valida su propia condición de entrada (`SIGNAL SQLSTATE`) y
 registra su propio movimiento en bitácora — no hay un trigger genérico de
@@ -106,33 +106,113 @@ bitácora por cambio de estatus, para evitar registros duplicados.
 | `AUXILIAR` | — | Solo sus propias afiliaciones capturadas |
 
 Los permisos reales se guardan en `permisos_usuario` (nivel `ESCRITURA` /
-`LECTURA` / `NINGUNO` por usuario y por módulo) y se pueden ajustar desde
-`permisos.pl` sin tocar la base de datos a mano. Reglas de alcance notables:
+`LECTURA` / `NINGUNO` por usuario y por módulo) y se ajustan desde
+`permisos.pl` sin tocar la base de datos a mano. Al guardar, la pantalla
+redirige al listado de usuarios y muestra una confirmación homologada con el
+resto de las alertas del sistema (o el detalle del error, si algo falló).
+
+Reglas de alcance notables:
 
 - Solo `SUPERADMIN` puede dar de alta asociaciones nuevas; un
   `ADMIN_ASOCIACION` solo puede editar la suya.
-- `FUNCIONARIO_IEEQ` no tiene ningún acceso a Registro de Afiliaciones
-  ("sin alta ni edición de afiliaciones", manual sección 2).
+- `FUNCIONARIO_IEEQ` no tiene acceso a Registro de Afiliaciones: solo
+  consulta, verificación y generación de cédulas.
 - Un Auxiliar solo puede recibir Escritura/Lectura en Registro de Afiliaciones
   y Lectura en Consulta y Gestión del Listado; cualquier otro módulo queda
-  bloqueado (forzado a `NINGUNO`), aunque el Admin de su asociación lo intente
-  desde `permisos.pl` — se bloquea también del lado del servidor, no solo en
-  el HTML.
+  bloqueado (forzado a `NINGUNO`) aunque el Admin de su asociación intente
+  otorgarlo desde `permisos.pl` — la restricción se aplica también del lado
+  del servidor al guardar, no solo ocultando la opción en el formulario.
 
 El sidebar (`Plantilla::encabezado`) se construye dinámicamente a partir de
 estos permisos: un módulo en `NINGUNO` ni siquiera aparece en el menú.
 
-## 4. Detalles de implementación que vale la pena recordar
+### Acceso denegado homologado
+
+Cuando un usuario intenta entrar a un módulo o a una acción que no le
+corresponde, el sistema nunca deja la pantalla en blanco: `Plantilla::denegar_acceso`
+dibuja el mismo sidebar de siempre junto con una alerta roja explicando qué
+pasó, para que la persona pueda seguir navegando el resto del sistema sin
+perder el menú ni tener que usar el botón "atrás" del navegador.
+
+## 4. Funcionalidades por módulo
+
+**Registro de Afiliaciones** (`afiliaciones_nueva.pl`)
+- Formulario de alta y edición en un solo script.
+- Todos los campos de identificación y domicilio son obligatorios (excepto
+  apellido materno y número interior); la validación se repite en el servidor
+  aunque el HTML ya marque los campos como `required`.
+- La clave de elector se valida contra el formato de 18 caracteres
+  alfanuméricos; el mensaje de error indica cuántos caracteres tiene la que se
+  capturó.
+- Todo el texto se convierte a mayúsculas antes de guardarse, y también se ve
+  en mayúsculas mientras se escribe (retroalimentación visual inmediata, sin
+  esperar a enviar el formulario).
+- Los campos con error se resaltan individualmente (borde e ícono de
+  advertencia) en vez de mostrar un solo mensaje genérico; si el formulario se
+  rechaza, los datos ya capturados se conservan en pantalla en vez de
+  borrarse.
+- La captura sigue un patrón de dos fases: primero se valida todo el
+  formulario, y solo si no hay ningún error se escriben los archivos subidos a
+  disco — así no quedan fotos o firmas huérfanas en el servidor cuando falla
+  otro campo.
+- La firma se captura directamente en pantalla (`<canvas>`, con mouse o
+  touch) y se guarda como PNG en base64, no como archivo subido.
+- Los campos de foto (anverso, reverso, selfie) usan `capture` para preferir
+  la cámara del dispositivo sobre la galería en celulares.
+- El botón "Guardar" se deshabilita en cuanto se envía el formulario, para
+  evitar registros duplicados por doble clic.
+- Un registro en estatus Rechazada puede editarse igual que uno Nuevo; al
+  abrirlo para corregirlo, se muestra el motivo del rechazo capturado por
+  Verificación.
+
+**Consulta y Gestión del Listado** (`afiliaciones_listado.pl`)
+- Pastillas de filtro por estatus (Todas, Nueva, En revisión, Verificada,
+  Rechazada) con su conteo.
+- Buscador por nombre o clave de elector.
+- Columna de "Flujo": tres puntos que representan el avance del ciclo de
+  vida del registro.
+- Acciones contextuales (ver, editar, enviar a revisión, eliminar) según el
+  estatus del registro y el rol de quien la ve.
+
+**Verificación de Afiliaciones** (`afiliaciones_verificar.pl`)
+- Cola de pendientes (estatus En revisión), ordenada por antigüedad.
+- Pantalla de decisión con la evidencia completa del registro y un campo de
+  observaciones.
+- Aprobar deja el registro en Verificado; Rechazar lo deja en Rechazada junto
+  con el motivo capturado, que la asociación puede consultar al corregirlo.
+
+**Cédulas de Afiliación** (`cedulas.pl`)
+- Vista HTML imprimible (con estilos `@media print`) de un registro ya
+  Verificado; el botón "Imprimir" del navegador permite guardarla como PDF sin
+  depender de librerías adicionales de Perl.
+
+**Bitácora y Auditoría** (`bitacora.pl`)
+- No carga información automáticamente al entrar: se eligen los filtros
+  (tipo de acción, rango de fechas) y se presiona "Mostrar registros" para
+  desplegarla. Evita consultas pesadas innecesarias en una tabla que puede
+  crecer mucho.
+- Cada acción relevante del sistema (login, alta/edición/eliminación de
+  registros, aprobación/rechazo, asignación de permisos, generación de
+  cédulas) se registra con usuario, módulo, fecha e IP de origen.
+
+**Inicio de sesión** (`login.pl`)
+- Etiquetas asociadas a sus campos (`for`/`id`), `autocomplete` correcto,
+  mensaje de error anunciado con `role="alert"` y `aria-describedby`/
+  `aria-invalid` en los campos con error.
+- Botón para mostrar/ocultar la contraseña, con su propio `aria-pressed` y
+  `aria-label` que cambian según el estado.
+
+## 5. Detalles de implementación que vale la pena recordar
 
 - **UTF-8**: cada script tiene `use utf8;` (el código fuente está en UTF-8) y
   `binmode(STDOUT, ':encoding(UTF-8)')`. Además, `Auth::guardar_texto_sesion` /
   `obtener_texto_sesion` codifican/decodifican explícitamente los valores con
   acentos antes de guardarlos en la sesión — `CGI::Session` no lo hace solo,
-  y sin esto los nombres con tilde se corrompen entre una petición y otra.
-- **Firma en pantalla**: `afiliaciones_nueva.pl` no pide subir una foto de la
-  firma; usa un `<canvas>` (dibujo con mouse o touch) y manda el resultado como
-  PNG en base64 (`MIME::Base64`), tal como lo describe el manual, sección 5.4
-  ("firma capturada en pantalla").
+  y sin esto los nombres con tilde se corrompen entre una petición y otra. Los
+  parámetros que llegan por `CGI.pm` sí necesitan `decode_utf8` explícito; los
+  que ya vienen de una consulta con `mysql_enable_utf8mb4` no, porque
+  `DBD::mysql` ya los entrega decodificados — aplicarlo dos veces corrompe el
+  texto.
 - **Rutas de archivos subidos**: `Rutas.pm` expone `$RUTA_UPLOADS`, que por
   defecto usa `FindBin ($Bin)` pero se puede sobreescribir con la variable de
   entorno `IEEQ_RUTA_UPLOADS`. Es necesario en servidores donde el
@@ -146,11 +226,12 @@ estos permisos: un módulo en `NINGUNO` ni siquiera aparece en el menú.
   subconsulta van envueltas en `MAX()` porque MySQL, en modo
   `ONLY_FULL_GROUP_BY` (activo por defecto), lo exige aunque la subconsulta
   siempre regrese una sola fila.
-- **Cédulas**: se generan como una vista HTML con estilos `@media print`, no
-  como PDF generado en el servidor — el botón "Imprimir" del navegador ya
-  permite guardar como PDF sin sumar dependencias de Perl.
+- **Validación defensiva del lado del servidor**: ningún control de acceso o
+  regla de negocio depende solo de que el HTML lo oculte o lo marque como
+  `disabled` — se vuelve a validar al recibir el `POST`, tanto en Perl como en
+  triggers/procedimientos de MySQL.
 
-## 5. Instalación
+## 6. Instalación
 
 ```bash
 # 1. Base de datos (un solo comando, ya trae todo)
@@ -188,6 +269,9 @@ VirtualHost mínimo:
         SetEnv IEEQ_DB_NAME ieeq_registro
         SetEnv IEEQ_DB_USER root
         SetEnv IEEQ_DB_PASS "tu_password_aqui"
+        # Opcional: solo necesario si el DocumentRoot de arriba es un
+        # symlink hacia otra ruta real (ver Rutas.pm en la sección 5).
+        # SetEnv IEEQ_RUTA_UPLOADS /var/www/html/ieeq
     </Directory>
 </VirtualHost>
 ```
@@ -199,7 +283,7 @@ sudo systemctl reload apache2
 echo "127.0.0.1 ieeq.local" | sudo tee -a /etc/hosts
 ```
 
-## 6. Usuarios de prueba
+## 7. Usuarios de prueba
 
 Contraseña de todos: `12345678`
 
@@ -210,30 +294,19 @@ Contraseña de todos: `12345678`
 | admin.rumbo@nuevorumbo.mx | ADMIN_ASOCIACION |
 | pedro.aux@nuevorumbo.mx / laura.aux@nuevorumbo.mx | AUXILIAR |
 
-## 7. Flujo de prueba de punta a punta
+## 8. Flujo de prueba de punta a punta
 
 1. **Auxiliar** → *Nueva Afiliación* → captura datos + fotos + firma en pantalla
    → estatus `Nueva afiliación`.
-2. **Auxiliar o Admin de Asociación** → *Listado* → botón de enviar (📤) →
+2. **Auxiliar o Admin de Asociación** → *Listado* → botón de enviar →
    estatus `En revisión` → ahora aparece en la cola del Funcionariado.
 3. **Funcionariado IEEQ** → *Verificación* → revisa evidencia → Aprobar
-   (→ `Verificado`) o Rechazar (regresa a `Nueva afiliación`).
-4. **Admin de Asociación o Funcionariado** → *Cédulas* → genera la cédula
+   (→ `Verificado`) o Rechazar (→ `Rechazada`, con motivo).
+4. Si se rechazó: **Auxiliar o Admin de Asociación** → *Listado* → edita el
+   registro rechazado, corrige lo necesario y vuelve a enviarlo a revisión
+   (paso 2).
+5. **Admin de Asociación o Funcionariado** → *Cédulas* → genera la cédula
    imprimible del registro verificado.
-5. Cualquier rol con acceso → *Bitácora* → confirma que cada paso anterior
-   quedó registrado.
+6. Cualquier rol con acceso → *Bitácora* → selecciona filtros y confirma que
+   cada paso anterior quedó registrado.
 
-## 8. Verificar que el `.sql` funciona "desde cero"
-
-Antes de compartir el repo o hacer un despliegue nuevo, conviene comprobar
-que el script realmente es autocontenido:
-
-```bash
-mysql -u root -p < sql/ieeq_registro_v5.sql
-mysql -u root -p -e "SHOW PROCEDURE STATUS WHERE Db='ieeq_registro';"
-mysql -u root -p -e "SELECT * FROM ieeq_registro.vw_estadisticas_afiliaciones;"
-```
-
-Si los 3 procedimientos aparecen y la vista no da error de
-`ONLY_FULL_GROUP_BY`, el script está completo y listo para que cualquiera lo
-descargue.

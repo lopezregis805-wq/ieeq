@@ -10,6 +10,20 @@
 --      número exterior (columna domicilio_numero, ya existía) de
 --      número interior (opcional, para departamentos/interiores).
 --
+--   2. afiliaciones.estatus -> se agrega el valor 'RECHAZADA'.
+--      Antes, al rechazar una verificación, sp_verificar_afiliacion
+--      regresaba el registro a 'NUEVA' (mismo estatus que uno recién
+--      capturado), lo que no permitía distinguir a simple vista un
+--      registro nunca revisado de uno ya rechazado. Ahora el rechazo
+--      deja el registro en 'RECHAZADA', su propio estatus, para dar
+--      seguimiento más puntual y no confundir a las asociaciones.
+--      'RECHAZADA' se comporta igual que 'NUEVA' para efectos de
+--      edición, reenvío a revisión y eliminación (trigger
+--      trg_validar_edicion_afiliacion y los procedimientos
+--      sp_enviar_a_revision / sp_eliminar_afiliacion ya lo
+--      contemplan): la asociación puede corregir el registro y
+--      volver a mandarlo a revisión.
+--
 -- El resto del esquema es idéntico a v4. Los siguientes cambios
 -- de negocio del formulario de Registro de Afiliaciones NO
 -- requieren alterar el esquema porque ya se validan o se muestran
@@ -195,7 +209,7 @@ CREATE TABLE afiliaciones (
     acepta_documentos         TINYINT(1) NOT NULL DEFAULT 0,
     acepta_no_otro_partido    TINYINT(1) NOT NULL DEFAULT 0,
     acepta_aviso_privacidad   TINYINT(1) NOT NULL DEFAULT 0,
-    estatus                   ENUM('NUEVA','EN_REVISION','VERIFICADO') NOT NULL DEFAULT 'NUEVA',
+    estatus                   ENUM('NUEVA','EN_REVISION','VERIFICADO','RECHAZADA') NOT NULL DEFAULT 'NUEVA', -- [v5]
     id_registrador            INT NOT NULL,
     fecha_creacion            DATETIME NOT NULL DEFAULT NOW(),
     fecha_actualizacion       DATETIME NULL ON UPDATE NOW(),
@@ -316,7 +330,8 @@ SELECT
     COUNT(a.id_afiliacion) AS total_afiliaciones,
     SUM(a.estatus = 'VERIFICADO')  AS verificadas,
     SUM(a.estatus = 'EN_REVISION') AS en_revision,
-    SUM(a.estatus = 'NUEVA')       AS nuevas
+    SUM(a.estatus = 'NUEVA')       AS nuevas,
+    SUM(a.estatus = 'RECHAZADA')   AS rechazadas -- [v5]
 FROM asociaciones_politicas ap
 LEFT JOIN usuarios u   ON u.id_asociacion = ap.id_asociacion
 LEFT JOIN afiliaciones a ON a.id_registrador = u.id_usuario AND a.fecha_eliminacion IS NULL
@@ -342,11 +357,12 @@ CREATE TRIGGER trg_validar_edicion_afiliacion
 BEFORE UPDATE ON afiliaciones
 FOR EACH ROW
 BEGIN
-    IF OLD.estatus != 'NUEVA' AND (
+    -- [v5] Rechazada se edita igual que Nueva: permite corregir y reenviar.
+    IF OLD.estatus NOT IN ('NUEVA', 'RECHAZADA') AND (
         NEW.nombre != OLD.nombre OR NEW.apellido_paterno != OLD.apellido_paterno
     ) THEN
         SIGNAL SQLSTATE '45000'
-        SET MESSAGE_TEXT = 'Solo se pueden editar afiliaciones con estatus Nueva afiliacion';
+        SET MESSAGE_TEXT = 'Solo se pueden editar afiliaciones con estatus Nueva afiliacion o Rechazada';
     END IF;
 END //
 
@@ -362,15 +378,15 @@ CREATE PROCEDURE sp_enviar_a_revision(
     IN p_id_usuario    INT
 )
 BEGIN
-    DECLARE v_estatus ENUM('NUEVA','EN_REVISION','VERIFICADO');
+    DECLARE v_estatus ENUM('NUEVA','EN_REVISION','VERIFICADO','RECHAZADA');
 
     SELECT estatus INTO v_estatus FROM afiliaciones WHERE id_afiliacion = p_id_afiliacion;
 
     IF v_estatus IS NULL THEN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'La afiliacion no existe';
-    ELSEIF v_estatus != 'NUEVA' THEN
+    ELSEIF v_estatus NOT IN ('NUEVA', 'RECHAZADA') THEN -- [v5]
         SIGNAL SQLSTATE '45000'
-        SET MESSAGE_TEXT = 'Solo se puede enviar a revision una afiliacion en estatus Nueva afiliacion';
+        SET MESSAGE_TEXT = 'Solo se puede enviar a revision una afiliacion en estatus Nueva afiliacion o Rechazada';
     END IF;
 
     UPDATE afiliaciones
@@ -380,7 +396,7 @@ BEGIN
     INSERT INTO bitacora(id_usuario, accion, id_modulo, id_registro_afectado, detalles)
     VALUES(p_id_usuario, 'EDICION',
            (SELECT id_modulo FROM modulos_sistema WHERE clave = 'CONSULTA_AFILIACIONES'),
-           p_id_afiliacion, 'Afiliacion enviada a revision (Nueva -> En revision)');
+           p_id_afiliacion, CONCAT('Afiliacion enviada a revision (', v_estatus, ' -> En revision)'));
 END //
 
 CREATE PROCEDURE sp_verificar_afiliacion(
@@ -390,8 +406,8 @@ CREATE PROCEDURE sp_verificar_afiliacion(
     IN p_observaciones  TEXT
 )
 BEGIN
-    DECLARE v_estatus ENUM('NUEVA','EN_REVISION','VERIFICADO');
-    DECLARE v_estatus_nuevo ENUM('NUEVA','EN_REVISION','VERIFICADO');
+    DECLARE v_estatus ENUM('NUEVA','EN_REVISION','VERIFICADO','RECHAZADA');
+    DECLARE v_estatus_nuevo ENUM('NUEVA','EN_REVISION','VERIFICADO','RECHAZADA');
 
     DECLARE EXIT HANDLER FOR SQLEXCEPTION
     BEGIN
@@ -410,7 +426,9 @@ BEGIN
 
     START TRANSACTION;
 
-    SET v_estatus_nuevo = IF(p_decision = 'APROBADO', 'VERIFICADO', 'NUEVA');
+    -- [v5] antes un rechazo regresaba a 'NUEVA'; ahora queda en su
+    -- propio estatus 'RECHAZADA' para dar seguimiento más puntual.
+    SET v_estatus_nuevo = IF(p_decision = 'APROBADO', 'VERIFICADO', 'RECHAZADA');
 
     UPDATE afiliaciones
     SET estatus = v_estatus_nuevo,
@@ -433,13 +451,13 @@ CREATE PROCEDURE sp_eliminar_afiliacion(
     IN p_id_usuario    INT
 )
 BEGIN
-    DECLARE v_estatus ENUM('NUEVA','EN_REVISION','VERIFICADO');
+    DECLARE v_estatus ENUM('NUEVA','EN_REVISION','VERIFICADO','RECHAZADA');
 
     SELECT estatus INTO v_estatus FROM afiliaciones WHERE id_afiliacion = p_id_afiliacion;
 
-    IF v_estatus != 'NUEVA' THEN
+    IF v_estatus NOT IN ('NUEVA', 'RECHAZADA') THEN -- [v5]
         SIGNAL SQLSTATE '45000'
-        SET MESSAGE_TEXT = 'Solo se pueden eliminar afiliaciones con estatus Nueva afiliacion';
+        SET MESSAGE_TEXT = 'Solo se pueden eliminar afiliaciones con estatus Nueva afiliacion o Rechazada';
     END IF;
 
     UPDATE afiliaciones

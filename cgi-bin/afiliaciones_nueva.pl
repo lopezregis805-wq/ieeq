@@ -1,26 +1,8 @@
 #!/usr/bin/perl
 # ============================================================
-# afiliaciones_nueva.pl — Registro de Afiliaciones (manual,
-# sección 5.4 y Diagrama 7). El proceso más complejo del
+# afiliaciones_nueva.pl — Registro de Afiliaciones. El proceso más complejo del
 # sistema: combina datos personales, evidencia fotográfica y
 # declaraciones legales.
-#
-# También maneja la EDICIÓN (?accion=editar&id=N), llamado
-# desde afiliaciones_listado.pl, siguiendo el mismo patrón que
-# ya usamos en asociaciones.pl y usuarios.pl: un solo script
-# para alta y edición, en vez de duplicar el formulario.
-#
-# Reglas de negocio de esta pantalla (manual, sección 8):
-#   - las 4 casillas de aceptación son obligatorias; si falta
-#     una, el sistema NO permite guardar el registro
-#   - toda afiliación nueva inicia siempre en estatus "Nueva
-#     afiliación"
-#   - solo se puede editar mientras el estatus sea "Nueva
-#     afiliación", y solo quien la capturó o el administrador
-#     de su asociación (regla ya aplicada también en la BD
-#     mediante el trigger trg_validar_edicion_afiliacion)
-#   - el lugar de afiliación debe ser uno de los 18 municipios
-#     autorizados del catálogo (no texto libre)
 # ============================================================
 use strict;
 use warnings;
@@ -33,7 +15,7 @@ use DB qw(conectar);
 use Rutas qw($RUTA_UPLOADS);
 use Auth qw(iniciar_sesion requerir_sesion tiene_permiso obtener_texto_sesion);
 use Bitacora qw(registrar);
-use Plantilla qw(encabezado pie_pagina);
+use Plantilla qw(encabezado pie_pagina denegar_acceso);
 
 my $cgi = CGI->new;
 binmode(STDOUT, ":encoding(UTF-8)");
@@ -44,8 +26,9 @@ my $rol = $session->param('rol');
 my $id_asociacion_sesion = $session->param('id_asociacion');
 
 unless (tiene_permiso($dbh, $id_usuario, 'REGISTRO_AFILIACIONES', 'ESCRITURA')) {
-    print $cgi->header(-charset => 'utf-8', -status => '403 Forbidden');
-    print "No tienes permiso de captura en este módulo.";
+    denegar_acceso(titulo => 'Registro de Afiliaciones', usuario_nombre => obtener_texto_sesion($session, 'nombre'),
+                    rol => $rol, dbh => $dbh, id_usuario => $id_usuario, pagina_actual => 'REGISTRO_AFILIACIONES',
+                    mensaje => 'No tienes permiso de captura en este módulo.');
     exit;
 }
 
@@ -63,14 +46,15 @@ if ($id_edicion) {
     $registro_existente = $sth->fetchrow_hashref;
 
     my $autorizado = 0;
-    if ($registro_existente && $registro_existente->{estatus} eq 'NUEVA') {
+    if ($registro_existente && ($registro_existente->{estatus} eq 'NUEVA' || $registro_existente->{estatus} eq 'RECHAZADA')) {
         $autorizado = 1 if $rol eq 'SUPERADMIN';
         $autorizado = 1 if $rol eq 'ADMIN_ASOCIACION' && $registro_existente->{id_asociacion_registrador} == $id_asociacion_sesion;
         $autorizado = 1 if $rol eq 'AUXILIAR' && $registro_existente->{id_registrador} == $id_usuario;
     }
     unless ($autorizado) {
-        print $cgi->header(-charset => 'utf-8', -status => '403 Forbidden');
-        print "Este registro no existe, ya no está en estatus \"Nueva afiliación\", o no te pertenece.";
+        denegar_acceso(titulo => 'Registro de Afiliaciones', usuario_nombre => obtener_texto_sesion($session, 'nombre'),
+                        rol => $rol, dbh => $dbh, id_usuario => $id_usuario, pagina_actual => 'REGISTRO_AFILIACIONES',
+                        mensaje => 'Este registro no existe, ya no está en estatus "Nueva afiliación" o "Rechazada", o no te pertenece.');
         exit;
     }
 }
@@ -195,8 +179,8 @@ if ($cgi->request_method eq 'POST') {
     #     firma se maneja aparte, más abajo: viene de un <canvas>
     #     donde la persona firma en pantalla, no de un archivo. ---
     # nada de esto se escribe a disco todavía: si falta cualquier otro
-    # dato en el formulario, no queremos dejar fotos/firma huérfanas en
-    # uploads/ sin un registro en la base de datos que las respalde.
+    # dato en el formulario.
+    # 
     # Solo se valida aquí; el guardado real ocurre más abajo, una vez
     # confirmado que el resto del formulario también es válido.
     my %rutas;
@@ -353,6 +337,19 @@ if ($guardado_ok) {
              <a href="afiliaciones_nueva.pl" class="alert-link">Capturar otra</a> ·
              <a href="afiliaciones_listado.pl" class="alert-link">Ver el listado</a>
            </div>);
+} elsif ($registro_existente && $registro_existente->{estatus} eq 'RECHAZADA') {
+    # este registro fue rechazado: mostrar el motivo para que se
+    # corrija con seguimiento puntual antes de reenviarlo a revisión
+    my $sth_motivo = $dbh->prepare(
+        'SELECT observaciones FROM verificaciones_afiliaciones
+         WHERE id_afiliacion = ? AND decision = "RECHAZADO"
+         ORDER BY fecha_verificacion DESC LIMIT 1'
+    );
+    $sth_motivo->execute($id_edicion);
+    my ($motivo_rechazo) = $sth_motivo->fetchrow_array;
+    print '<div class="alert alert-danger"><strong>Este registro fue rechazado.</strong> Corrige lo necesario y vuelve a enviarlo a revisión desde el listado.';
+    print qq(<div class="mt-1">Motivo: $motivo_rechazo</div>) if length($motivo_rechazo // '');
+    print '</div>';
 }
 
 my $datos_para_formulario = ($cgi->request_method eq 'POST' && !$guardado_ok) ? \%valores_formulario : $registro_existente;
@@ -366,10 +363,7 @@ sub mostrar_formulario {
     $campo_invalido //= {};
 
     # clase, mensaje y resaltado de fondo para un campo con error. No
-    # dependemos solo de "is-invalid" (que Bootstrap solo pinta el borde,
-    # fácil de pasar por alto): forzamos "d-block" para que el mensaje
-    # siempre se muestre, y coloreamos de fondo todo el bloque del campo
-    # para que el error sea imposible de ignorar y quede visible hasta
+    # dependemos solo de "is-invalid" para que el error sea imposible de ignorar y quede visible hasta
     # que se vuelva a enviar el formulario corregido.
     my $clase_error = sub { $campo_invalido->{ $_[0] } ? 'is-invalid' : '' };
     my $mensaje_error = sub {

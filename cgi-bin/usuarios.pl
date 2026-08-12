@@ -1,23 +1,15 @@
 #!/usr/bin/perl
 # ============================================================
-# usuarios.pl — Gestión de Usuarios (manual, Fase 2: pasos 3-6).
+# usuarios.pl — Gestión de Usuarios.
 #
-# Mismo patrón de 5 pasos que asociaciones.pl:
-#   1. sesión + permiso
-#   2. leer acción
-#   3. validar reglas de negocio (aquí la más importante es
-#      "quién puede crear a quién")
-#   4. ejecutar SQL
-#   5. bitácora + HTML
-#
-# Regla de negocio central (manual, sección 2.1):
+# Regla de negocio central:
 #   - SUPERADMIN crea ADMIN_ASOCIACION y FUNCIONARIO_IEEQ
 #   - ADMIN_ASOCIACION crea AUXILIAR, siempre en SU PROPIA
 #     asociación (no puede elegir otra ni volverse superadmin)
 # ============================================================
 use strict;
 use warnings;
-use utf8;                            # el codigo fuente de este archivo esta en UTF-8
+use utf8;                            
 use CGI;
 use lib './lib';
 use DB qw(conectar);
@@ -35,8 +27,9 @@ my $rol_sesion = $session->param('rol');
 my $id_asociacion_sesion = $session->param('id_asociacion');
 
 unless (tiene_permiso($dbh, $id_usuario, 'GESTION_USUARIOS', 'LECTURA')) {
-    print $cgi->header(-charset => 'utf-8', -status => '403 Forbidden');
-    print "Acceso no autorizado a este módulo.";
+    denegar_acceso(titulo => 'Gestión de Usuarios', usuario_nombre => obtener_texto_sesion($session, 'nombre'),
+                    rol => $rol_sesion, dbh => $dbh, id_usuario => $id_usuario, pagina_actual => 'GESTION_USUARIOS',
+                    mensaje => 'Acceso no autorizado a este módulo.');
     exit;
 }
 my $puede_escribir = tiene_permiso($dbh, $id_usuario, 'GESTION_USUARIOS', 'ESCRITURA');
@@ -51,8 +44,9 @@ my %roles_permitidos_por_creador = (
 my @roles_creables = @{ $roles_permitidos_por_creador{$rol_sesion} // [] };
 
 unless (@roles_creables) {
-    print $cgi->header(-charset => 'utf-8', -status => '403 Forbidden');
-    print "Tu rol no tiene usuarios que pueda dar de alta.";
+    denegar_acceso(titulo => 'Gestión de Usuarios', usuario_nombre => obtener_texto_sesion($session, 'nombre'),
+                    rol => $rol_sesion, dbh => $dbh, id_usuario => $id_usuario, pagina_actual => 'GESTION_USUARIOS',
+                    mensaje => 'Tu rol no tiene usuarios que pueda dar de alta.');
     exit;
 }
 
@@ -62,8 +56,9 @@ my @errores;
 # --- Paso 4: guardar (alta o edición) ---
 if ($accion eq 'guardar' && $cgi->request_method eq 'POST') {
     unless ($puede_escribir) {
-        print $cgi->header(-charset => 'utf-8', -status => '403 Forbidden');
-        print "No tienes permiso de escritura en este módulo.";
+        denegar_acceso(titulo => 'Gestión de Usuarios', usuario_nombre => obtener_texto_sesion($session, 'nombre'),
+                        rol => $rol_sesion, dbh => $dbh, id_usuario => $id_usuario, pagina_actual => 'GESTION_USUARIOS',
+                        mensaje => 'No tienes permiso de escritura en este módulo.');
         exit;
     }
 

@@ -1,11 +1,7 @@
 #!/usr/bin/perl
 # ============================================================
-# dashboard.pl — panel principal, uno por rol (manual, Diagrama
-# 4: "redirección al panel según su rol"). Cada rol ve tarjetas,
-# accesos rápidos y una lista de "capacidades" distintas, según
-# el diseño de Figma. El SUPERADMIN no aparecía en las capturas
-# que compartió Regi, así que ese panel es una propuesta propia
-# enfocada en administración del sistema.
+# dashboard.pl — panel principal, uno por rol. Cada rol ve tarjetas,
+# accesos rápidos y una lista de "capacidades" distintas.
 #
 # Diseño del código: en vez de escribir un bloque de HTML
 # distinto por cada rol (copy-paste x4), armamos una struct de
@@ -15,7 +11,7 @@
 # ============================================================
 use strict;
 use warnings;
-use utf8;                            # el codigo fuente de este archivo esta en UTF-8
+use utf8;                            
 use CGI;
 use lib './lib';
 use DB qw(conectar);
@@ -61,11 +57,7 @@ sub contar_afiliaciones {
             SUM(a.estatus = 'NUEVA')       AS nuevas,
             SUM(a.estatus = 'EN_REVISION')  AS en_revision,
             SUM(a.estatus = 'VERIFICADO')  AS verificadas,
-            SUM(EXISTS (
-                SELECT 1 FROM verificaciones_afiliaciones v
-                WHERE v.id_afiliacion = a.id_afiliacion AND v.decision = 'RECHAZADO'
-                AND v.id_verificacion = (SELECT MAX(id_verificacion) FROM verificaciones_afiliaciones WHERE id_afiliacion = a.id_afiliacion)
-            )) AS rechazadas
+            SUM(a.estatus = 'RECHAZADA')   AS rechazadas
          FROM afiliaciones a
          JOIN usuarios u2 ON u2.id_usuario = a.id_registrador
          WHERE a.fecha_eliminacion IS NULL AND $filtro_sql"
@@ -132,7 +124,7 @@ my %config = (
             ['morado',  'people',        $propio->{total},       'Mis Afiliaciones',       'capturas realizadas'],
             ['naranja', 'clock-history', $propio->{nuevas},      'En edición (nuevas)',    'puedes editarlas todavía'],
             ['verde',   'check-circle',  $propio->{verificadas}, 'Total verificadas',      'de tus capturas'],
-            ['azul',    'graph-up',      $global->{total},       'Total afiliaciones',     'en el sistema'],
+            ['rojo',    'x-circle',      $propio->{rechazadas},  'Rechazadas',             'corrígelas y reenvíalas'],
         ],
         acciones => [
             ['person-plus', 'afiliaciones_nueva.pl',   'Nueva Afiliación', 'Capturar un nuevo ciudadano'],
@@ -140,15 +132,15 @@ my %config = (
         ],
         capacidades => [
             [1, 'Capturar afiliaciones',  'Registrar nuevos afiliados'],
-            [1, 'Editar mis capturas',    'Solo registros propios con estatus "Nueva"'],
-            [1, 'Eliminar mis capturas',  'Solo registros propios con estatus "Nueva"'],
+            [1, 'Editar mis capturas',    'Registros propios con estatus "Nueva" o "Rechazada"'],
+            [1, 'Eliminar mis capturas',  'Registros propios con estatus "Nueva" o "Rechazada"'],
             [0, 'Enviar a revisión',      'Solo disponible para el Administrador'],
             [0, 'Gestionar usuarios',     'Solo disponible para el Administrador'],
             [0, 'Generar cédulas',        'Solo disponible para Administrador e IEEQ'],
         ],
-        alerta => ($propio->{nuevas} > 0)
-            ? ['warning', "$propio->{nuevas} de tus registros pueden ser editados",
-               'Tienes capturas con estatus "Nueva afiliación" que aún puedes modificar antes de que el Administrador las envíe a revisión.']
+        alerta => (($propio->{nuevas} + $propio->{rechazadas}) > 0)
+            ? ['warning', "$propio->{nuevas} de tus registros pueden ser editados" . ($propio->{rechazadas} ? " y $propio->{rechazadas} fueron rechazados" : ''),
+               'Tienes capturas con estatus "Nueva afiliación" o "Rechazada" que aún puedes modificar antes de enviarlas (o reenviarlas) a revisión.']
             : undef,
         mostrar_avance => 1,
     },
@@ -157,7 +149,7 @@ my %config = (
             ['morado',  'people',        $propio->{total},       'Total Afiliaciones', 'en el sistema'],
             ['naranja', 'clock-history', $propio->{nuevas},      'Pendientes de enviar','requieren tu acción'],
             ['verde',   'check-circle',  $propio->{verificadas}, 'Verificadas',         sprintf('%.1f%% del total', $propio->{total} ? $propio->{verificadas}/$propio->{total}*100 : 0)],
-            ['rojo',    'x-circle',      $propio->{rechazadas},  'Rechazadas',          'no aptas para registro'],
+            ['rojo',    'x-circle',      $propio->{rechazadas},  'Rechazadas',          'corrígelas y reenvíalas'],
         ],
         acciones => [
             ['person-plus', 'afiliaciones_nueva.pl',   'Nueva Afiliación',    'Capturar nuevo registro'],
@@ -173,7 +165,10 @@ my %config = (
             [1, 'Ver bitácora completa',  'Historial de operaciones del sistema'],
             [0, 'Verificar en padrón',    'Solo disponible para Funcionariado IEEQ'],
         ],
-        alerta => undef,
+        alerta => ($propio->{rechazadas} > 0)
+            ? ['warning', "$propio->{rechazadas} de tus registros fueron rechazados",
+               'Revísalos, corrígelos y vuelve a enviarlos a revisión desde el Listado de Afiliados.']
+            : undef,
         mostrar_avance => 1,
     },
     SUPERADMIN => {

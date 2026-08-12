@@ -1,13 +1,11 @@
 #!/usr/bin/perl
 # ============================================================
-# cedulas.pl — Generación de Cédulas de Afiliación (manual,
-# sección 5.6 y Diagrama 10).
+# cedulas.pl — Generación de Cédulas de Afiliación 
 #
-# Regla de negocio: solo se genera para registros ya
+# solo se genera para registros ya
 # "Verificado". Disponible solo para el Administrador de
 # Asociación y el Funcionariado IEEQ — "las personas auxiliares
-# no tienen este permiso" (ya se refleja en los permisos por
-# defecto: el Auxiliar tiene NINGUNO en este módulo).
+# no tienen este permiso"
 #
 # La cédula es una vista HTML lista para imprimir (@media print
 # en el CSS), no un PDF generado en el servidor: es la forma más
@@ -23,7 +21,7 @@ use lib './lib';
 use DB qw(conectar);
 use Auth qw(iniciar_sesion requerir_sesion tiene_permiso obtener_texto_sesion);
 use Bitacora qw(registrar);
-use Plantilla qw(encabezado pie_pagina);
+use Plantilla qw(encabezado pie_pagina denegar_acceso);
 
 my $cgi = CGI->new;
 binmode(STDOUT, ":encoding(UTF-8)");
@@ -34,8 +32,9 @@ my $rol = $session->param('rol');
 my $id_asociacion = $session->param('id_asociacion');
 
 unless (tiene_permiso($dbh, $id_usuario, 'CEDULAS_AFILIACION', 'LECTURA')) {
-    print $cgi->header(-charset => 'utf-8', -status => '403 Forbidden');
-    print "Acceso no autorizado a este módulo.";
+    denegar_acceso(titulo => 'Generación de Cédulas', usuario_nombre => obtener_texto_sesion($session, 'nombre'),
+                    rol => $rol, dbh => $dbh, id_usuario => $id_usuario, pagina_actual => 'CEDULAS_AFILIACION',
+                    mensaje => 'Acceso no autorizado a este módulo.');
     exit;
 }
 
@@ -131,8 +130,13 @@ sub mostrar_cedula {
         $autorizado = 1 if $rol eq 'ADMIN_ASOCIACION' && $r->{id_asociacion_registrador} == $id_asociacion;
     }
     unless ($autorizado) {
-        print $cgi->header(-charset => 'utf-8', -status => '403 Forbidden');
-        print "Esta cédula no está disponible: el registro no existe, no está en estatus \"Verificado\", o no pertenece a tu asociación.";
+        print $cgi->header(-charset => 'utf-8');
+        print qq(<!DOCTYPE html><html lang="es"><head><meta charset="utf-8">
+        <title>Cédula no disponible · IEEQ</title>
+        <link href="https://cdn.jsdelivr.net/npm/bootstrap\@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+        </head><body class="p-4">
+        <div class="alert alert-danger mb-0">Esta cédula no está disponible: el registro no existe, no está en estatus "Verificado", o no pertenece a tu asociación.</div>
+        </body></html>);
         exit;
     }
 

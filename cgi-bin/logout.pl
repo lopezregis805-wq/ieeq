@@ -1,7 +1,7 @@
 #!/usr/bin/perl
 use strict;
 use warnings;
-use utf8;                            # el codigo fuente de este archivo esta en UTF-8
+use utf8;                            
 use CGI;
 use lib './lib';
 use DB qw(conectar);

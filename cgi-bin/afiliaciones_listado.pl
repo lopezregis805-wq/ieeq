@@ -1,12 +1,8 @@
 #!/usr/bin/perl
 # ============================================================
 # afiliaciones_listado.pl — Consulta y Gestión del Listado
-# (manual, sección 5.5 y Diagrama 8). Layout tomado del Figma:
-# pastillas de filtro por estatus, buscador, avatar con
-# iniciales, columna de "Flujo" (ciclo de vida, Diagrama 9) y
-# acciones como íconos.
 #
-# Regla de negocio central (manual, sección 2 y regla 8):
+# Regla de negocio central:
 #   - un Auxiliar solo ve (y solo puede editar/eliminar) las
 #     afiliaciones que ÉL MISMO capturó
 #   - un Admin de Asociación ve todas las de su asociación, y
@@ -14,23 +10,18 @@
 #     "Nueva afiliación"
 #   - Funcionariado IEEQ y SUPERADMIN ven el listado completo;
 #     el Funcionariado solo puede CONSULTAR aquí (ni alta ni
-#     edición, según la tabla de roles del manual, sección 2)
+#     edición)
 #
-# Solo existen 3 estatus (Diagrama 9): Nueva afiliación, En
-# revisión y Verificado. Un rechazo NO es un cuarto estatus:
-# regresa el registro a "Nueva afiliación" para que se corrija
-# y se vuelva a enviar. Por eso esta pantalla ya no muestra
-# ningún estatus "Rechazada" inventado, solo el real de la BD.
 # ============================================================
 use strict;
 use warnings;
-use utf8;                            # el codigo fuente de este archivo esta en UTF-8
+use utf8;                            
 use CGI;
 use lib './lib';
 use DB qw(conectar);
 use Auth qw(iniciar_sesion requerir_sesion tiene_permiso obtener_texto_sesion);
 use Bitacora qw(registrar);
-use Plantilla qw(encabezado pie_pagina);
+use Plantilla qw(encabezado pie_pagina denegar_acceso);
 
 my $cgi = CGI->new;
 binmode(STDOUT, ":encoding(UTF-8)");
@@ -41,8 +32,10 @@ my $rol = $session->param('rol');
 my $id_asociacion = $session->param('id_asociacion');
 
 unless (tiene_permiso($dbh, $id_usuario, 'CONSULTA_AFILIACIONES', 'LECTURA')) {
-    print $cgi->header(-charset => 'utf-8', -status => '403 Forbidden');
-    print "Acceso no autorizado a este módulo.";
+    denegar_acceso(titulo => ($rol eq 'AUXILIAR' ? 'Mis Registros' : 'Listado de Afiliados'),
+                    usuario_nombre => obtener_texto_sesion($session, 'nombre'),
+                    rol => $rol, dbh => $dbh, id_usuario => $id_usuario, pagina_actual => 'CONSULTA_AFILIACIONES',
+                    mensaje => 'Acceso no autorizado a este módulo.');
     exit;
 }
 
@@ -56,7 +49,7 @@ if (($cgi->param('accion') // '') eq 'eliminar' && $cgi->request_method eq 'POST
                   clave_modulo => 'CONSULTA_AFILIACIONES', id_registro_afectado => $id,
                   detalles => 'Afiliación eliminada (soft delete)', ip => $cgi->remote_addr);
     };
-    push @errores, 'No se pudo eliminar: el registro ya no está en estatus "Nueva afiliación".' if $@;
+    push @errores, 'No se pudo eliminar: el registro ya no está en estatus "Nueva afiliación" o "Rechazada".' if $@;
 }
 
 # --- enviar a revisión (NUEVA -> EN_REVISION), para que aparezca
@@ -66,7 +59,7 @@ if (($cgi->param('accion') // '') eq 'enviar_revision' && $cgi->request_method e
     eval {
         $dbh->do('CALL sp_enviar_a_revision(?, ?)', undef, $id, $id_usuario);
     };
-    push @errores, 'No se pudo enviar a revisión: el registro ya no está en estatus "Nueva afiliación".' if $@;
+    push @errores, 'No se pudo enviar a revisión: el registro ya no está en estatus "Nueva afiliación" o "Rechazada".' if $@;
 }
 
 my $filtro_estatus = $cgi->param('filtro') // 'TODOS';
@@ -77,9 +70,9 @@ print encabezado(titulo => ($rol eq 'AUXILIAR' ? 'Mis Registros' : 'Listado de A
                   dbh => $dbh, id_usuario => $id_usuario, pagina_actual => 'CONSULTA_AFILIACIONES');
 
 if (@errores) {
-    print '<div class="alert alert-danger">';
-    print "$_<br>" for @errores;
-    print '</div>';
+    print '<div class="alert alert-danger"><ul class="mb-0">';
+    print "<li>$_</li>" for @errores;
+    print '</ul></div>';
 }
 
 mostrar_listado($dbh, $rol, $id_usuario, $id_asociacion, $filtro_estatus, $buscar);
@@ -106,13 +99,14 @@ sub mostrar_listado {
             COUNT(*) AS todos,
             SUM(a.estatus = 'NUEVA')       AS nueva,
             SUM(a.estatus = 'EN_REVISION') AS en_revision,
-            SUM(a.estatus = 'VERIFICADO')  AS verificada
+            SUM(a.estatus = 'VERIFICADO')  AS verificada,
+            SUM(a.estatus = 'RECHAZADA')   AS rechazada
          FROM afiliaciones a JOIN usuarios u ON u.id_usuario = a.id_registrador
          WHERE a.fecha_eliminacion IS NULL AND $condicion_alcance"
     );
     $sth_conteos->execute(@$params_alcance);
     my $c = $sth_conteos->fetchrow_hashref;
-    for (qw(todos nueva en_revision verificada)) { $c->{$_} //= 0; }
+    for (qw(todos nueva en_revision verificada rechazada)) { $c->{$_} //= 0; }
 
     print '<div class="d-flex flex-wrap gap-2 mb-3">';
     my @pastillas = (
@@ -120,6 +114,7 @@ sub mostrar_listado {
         ['NUEVA', 'Nueva afiliación', $c->{nueva}],
         ['EN_REVISION', 'En revisión', $c->{en_revision}],
         ['VERIFICADO', 'Verificada', $c->{verificada}],
+        ['RECHAZADA', 'Rechazada', $c->{rechazada}],
     );
     for my $p (@pastillas) {
         my ($valor, $etiqueta, $conteo) = @$p;
@@ -162,7 +157,7 @@ sub mostrar_listado {
     $sth->execute(@params);
 
     my $mostrar_columna_registrador = ($rol ne 'AUXILIAR');
-    my %color_estatus = (NUEVA => 'secondary', EN_REVISION => 'warning', VERIFICADO => 'success');
+    my %color_estatus = (NUEVA => 'secondary', EN_REVISION => 'warning', VERIFICADO => 'success', RECHAZADA => 'danger');
     my @colores_avatar = qw(morado azul verde naranja rojo);
 
     print '<div class="card border-0 shadow-sm"><div class="card-body p-0">';
@@ -177,18 +172,21 @@ sub mostrar_listado {
         my $iniciales = uc(substr($r->{nombre_completo}, 0, 1) . substr((split / /, $r->{nombre_completo})[1] // '', 0, 1));
         my $color_avatar = $colores_avatar[$fila % scalar @colores_avatar];
 
-        # ¿este usuario puede editar/eliminar ESTE registro?
+        # ¿este usuario puede editar/eliminar ESTE registro? Rechazada se
+        # gestiona igual que Nueva: se puede corregir y reenviar a revisión.
         my $puede_gestionar = 0;
-        if ($r->{estatus} eq 'NUEVA') {
+        if ($r->{estatus} eq 'NUEVA' || $r->{estatus} eq 'RECHAZADA') {
             $puede_gestionar = 1 if $rol eq 'SUPERADMIN';
             $puede_gestionar = 1 if $rol eq 'ADMIN_ASOCIACION' && $r->{id_asociacion_registrador} == $id_asociacion;
             $puede_gestionar = 1 if $rol eq 'AUXILIAR' && $r->{id_registrador} == $id_usuario;
         }
 
-        # --- Flujo: 3 puntos según el ciclo de vida (Diagrama 9) ---
+       
+        # --- Flujo: 3 puntos según el ciclo de vida---
         my ($p1, $p2, $p3) = ('bg-secondary', 'bg-light', 'bg-light');
         if ($r->{estatus} eq 'EN_REVISION') { ($p1, $p2, $p3) = ('bg-ieeq-primary', 'bg-ieeq-primary', 'bg-light'); }
         if ($r->{estatus} eq 'VERIFICADO')  { ($p1, $p2, $p3) = ('bg-success', 'bg-success', 'bg-success'); }
+        if ($r->{estatus} eq 'RECHAZADA')   { ($p1, $p2, $p3) = ('bg-danger', 'bg-light', 'bg-light'); }
 
         print qq(
         <tr>

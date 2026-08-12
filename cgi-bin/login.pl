@@ -1,15 +1,12 @@
 #!/usr/bin/perl
 # ============================================================
-# login.pl — puerta de entrada al sistema (manual, sección 5.1)
-# Layout tomado del diseño de Figma: panel izquierdo con
-# degradado morado institucional + panel derecho con el
-# formulario y una caja de accesos de demostración.
+# login.pl — puerta de entrada al sistema 
 # ============================================================
 use strict;
 use warnings;
-use utf8;                            # el codigo fuente de este archivo esta en UTF-8
+use utf8;                           
 use CGI;
-use CGI::Carp qw(fatalsToBrowser); # TEMPORAL: para ver el error real, quitar después
+use CGI::Carp qw(fatalsToBrowser); 
 use lib './lib';
 use DB qw(conectar);
 use Auth qw(iniciar_sesion validar_credenciales);

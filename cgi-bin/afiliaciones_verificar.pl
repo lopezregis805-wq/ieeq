@@ -1,23 +1,15 @@
 #!/usr/bin/perl
 # ============================================================
 # afiliaciones_verificar.pl — Verificación de Afiliaciones
-# (manual, sección 5 "Verificación de afiliaciones" y Fase 4,
-# paso 10 del flujo operativo completo).
+# 
 #
-# Rol responsable: Funcionariado IEEQ (tabla de roles, sección
-# 2 del manual: "Lectura global. Generación de cédulas. Sin
+# Rol responsable: Funcionariado IEEQ
+# Generación de cédulas. Sin
 # alta ni edición de afiliaciones" + permiso de escritura
-# específico en este módulo para poder decidir).
+# específico en este módulo para poder decidir.
 #
-# Dos pantallas en un solo script (mismo patrón ya usado):
-#   - accion=listar  (default): cola de pendientes (Nueva y
-#     En revisión), de TODO el sistema, sin filtrar por
-#     asociación — el Funcionariado ve todo.
-#   - accion=revisar&id=N: detalle + formulario de decisión.
-#     La decisión real la ejecuta sp_verificar_afiliacion, que
-#     ya se encarga de actualizar el estatus Y registrar la
-#     verificación en una sola transacción (ver el .sql).
 # ============================================================
+
 use strict;
 use warnings;
 use utf8;                            # el codigo fuente de este archivo esta en UTF-8
@@ -25,7 +17,7 @@ use CGI;
 use lib './lib';
 use DB qw(conectar);
 use Auth qw(iniciar_sesion requerir_sesion tiene_permiso obtener_texto_sesion);
-use Plantilla qw(encabezado pie_pagina);
+use Plantilla qw(encabezado pie_pagina denegar_acceso);
 
 my $cgi = CGI->new;
 binmode(STDOUT, ":encoding(UTF-8)");
@@ -35,8 +27,9 @@ my $dbh = conectar();
 my $rol = $session->param('rol');
 
 unless (tiene_permiso($dbh, $id_usuario, 'VERIFICACION_AFILIACIONES', 'LECTURA')) {
-    print $cgi->header(-charset => 'utf-8', -status => '403 Forbidden');
-    print "Acceso no autorizado a este módulo.";
+    denegar_acceso(titulo => 'Verificación de Afiliaciones', usuario_nombre => obtener_texto_sesion($session, 'nombre'),
+                    rol => $rol, dbh => $dbh, id_usuario => $id_usuario, pagina_actual => 'VERIFICACION_AFILIACIONES',
+                    mensaje => 'Acceso no autorizado a este módulo.');
     exit;
 }
 my $puede_decidir = tiene_permiso($dbh, $id_usuario, 'VERIFICACION_AFILIACIONES', 'ESCRITURA');
@@ -48,8 +41,9 @@ my $decidido_ok = 0;
 # --- procesar una decisión ---
 if ($accion eq 'decidir' && $cgi->request_method eq 'POST') {
     unless ($puede_decidir) {
-        print $cgi->header(-charset => 'utf-8', -status => '403 Forbidden');
-        print "No tienes permiso para verificar afiliaciones.";
+        denegar_acceso(titulo => 'Verificación de Afiliaciones', usuario_nombre => obtener_texto_sesion($session, 'nombre'),
+                        rol => $rol, dbh => $dbh, id_usuario => $id_usuario, pagina_actual => 'VERIFICACION_AFILIACIONES',
+                        mensaje => 'No tienes permiso para verificar afiliaciones.');
         exit;
     }
     my $id = $cgi->param('id');
@@ -81,9 +75,9 @@ if ($decidido_ok) {
     print '<div class="alert alert-success">Decisión registrada correctamente.</div>';
 }
 if (@errores) {
-    print '<div class="alert alert-danger">';
-    print "$_<br>" for @errores;
-    print '</div>';
+    print '<div class="alert alert-danger"><ul class="mb-0">';
+    print "<li>$_</li>" for @errores;
+    print '</ul></div>';
 }
 
 if ($accion eq 'revisar' && $cgi->param('id')) {
@@ -158,6 +152,7 @@ sub mostrar_pantalla_decision {
     my $r = $sth->fetchrow_hashref;
     unless ($r) {
         print '<div class="alert alert-danger">Registro no encontrado.</div>';
+        mostrar_cola_pendientes($dbh);
         return;
     }
 
@@ -208,7 +203,7 @@ sub mostrar_pantalla_decision {
             </div>
           </form>
           <div class="small text-muted mt-3">
-            Al rechazar, el registro regresa a estatus "Nueva afiliación" para que la asociación pueda corregirlo y volver a enviarlo.
+            Al rechazar, el registro queda en estatus "Rechazada" para que la asociación pueda corregirlo y volver a enviarlo a revisión.
           </div>
         );
     } else {

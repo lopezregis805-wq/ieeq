@@ -1,21 +1,20 @@
 #!/usr/bin/perl
 # ============================================================
-# padron.pl — Padrón Electoral de Referencia (manual, sección
-# 5.3 y Diagrama 6).
+# padron.pl — Padrón Electoral de Referencia 
 #
-# Regla de negocio (manual, sección 5.3): mantiene el dato
+# Regla de negocio: mantiene el dato
 # oficial del padrón, su fecha de corte y el % mínimo de
 # afiliados requerido. Solo debe existir UN registro "activo"
 # a la vez — al capturar uno nuevo, los anteriores se desactivan
 # (se guarda su historial, no se borran).
 #
-# Rol responsable (Diagrama 6): "IEEQ o administrador". En este
+# Rol responsable: "IEEQ o administrador". En este
 # proyecto eso corresponde a SUPERADMIN y, cuando se le asigne
 # el permiso desde permisos.pl, también a FUNCIONARIO_IEEQ.
 # ============================================================
 use strict;
 use warnings;
-use utf8;                            # el codigo fuente de este archivo esta en UTF-8
+use utf8;                            
 use CGI;
 use lib './lib';
 use DB qw(conectar);
@@ -58,7 +57,7 @@ if ($cgi->request_method eq 'POST' && ($cgi->param('accion') // '') eq 'guardar'
 
     if (!@errores) {
         # Transacción: desactivar el/los anterior(es) e insertar el
-        # nuevo como único activo, todo o nada.
+        # nuevo como único activo.
         eval {
             $dbh->begin_work;
             $dbh->do('UPDATE padron_electoral SET activo = 0 WHERE activo = 1');

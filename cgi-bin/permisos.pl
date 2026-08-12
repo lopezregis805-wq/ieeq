@@ -1,19 +1,18 @@
 #!/usr/bin/perl
 # ============================================================
-# permisos.pl — Gestión de Permisos (manual, Fase 2, pasos 4 y
-# 6 del flujo operativo completo).
+# permisos.pl — Gestión de Permisos 
 #
-# Regla de negocio central (manual, sección 2.1 y Fase 2):
+# Regla de negocio central:
 #   - SUPERADMIN asigna permisos a ADMIN_ASOCIACION y a
-#     FUNCIONARIO_IEEQ (Paso 4)
+#     FUNCIONARIO_IEEQ 
 #   - ADMIN_ASOCIACION asigna permisos, pero SOLO a sus propios
-#     AUXILIARES (Paso 6), y no puede darles acceso a Gestión
+#     AUXILIARES, y no puede darles acceso a Gestión
 #     de Usuarios ni a Gestión de Permisos (evita que un
 #     auxiliar termine con más poder del que le corresponde)
 # ============================================================
 use strict;
 use warnings;
-use utf8;                            # el codigo fuente de este archivo esta en UTF-8
+use utf8;                            
 use CGI;
 use lib './lib';
 use DB qw(conectar);
@@ -38,9 +37,8 @@ my $puede_escribir = tiene_permiso($dbh, $id_usuario, 'GESTION_PERMISOS', 'ESCRI
 
 # Módulos que un Auxiliar SÍ puede recibir, y los niveles que se
 # le pueden otorgar en cada uno. Cualquier módulo que no aparezca
-# aquí queda bloqueado (forzado a NINGUNO) para un Auxiliar, igual
-# que ya pasaba con Gestión de Usuarios y Gestión de Permisos —
-# evita que un auxiliar termine con más poder del que le corresponde.
+# aquí queda bloqueado (forzado a NINGUNO) para un Auxiliar.
+
 my %niveles_permitidos_para_auxiliar = (
     REGISTRO_AFILIACIONES => [qw(ESCRITURA LECTURA NINGUNO)],
     CONSULTA_AFILIACIONES => [qw(LECTURA NINGUNO)],
@@ -79,12 +77,6 @@ print pie_pagina();
 # ============================================================
 sub mostrar_listado {
     my ($dbh, $rol_sesion, $id_asociacion_sesion) = @_;
-
-    if ($cgi->param('guardado')) {
-        my $usuario_guardado = $cgi->escapeHTML($cgi->param('usuario') // '');
-        my $detalle = length($usuario_guardado) ? " de $usuario_guardado" : '';
-        print qq(<div class="alert alert-success">Permisos$detalle actualizados correctamente.</div>);
-    }
 
     my $sql = 'SELECT u.id_usuario, u.nombre, u.apellido_paterno, u.correo_electronico, u.tipo_usuario,
                       ap.nombre AS asociacion
@@ -143,7 +135,9 @@ sub mostrar_edicion {
 
     my $es_auxiliar_ajeno_bloqueo = ($usuario_objetivo->{tipo_usuario} eq 'AUXILIAR'); # aplica el bloqueo de módulos
 
-    if ($cgi->param('error')) {
+    if ($cgi->param('guardado')) {
+        print '<div class="alert alert-success">Permisos actualizados correctamente.</div>';
+    } elsif ($cgi->param('error')) {
         print '<div class="alert alert-danger">No se pudieron guardar los permisos. Intenta de nuevo; si el problema continúa, avisa al administrador del sistema.</div>';
     }
 
@@ -248,10 +242,7 @@ sub guardar_permisos {
     # si algo falló (ej. la base de datos rechazó un valor), se lo
     # avisamos al usuario en vez de dejar que la petición truene con un
     # error 500 sin explicación
-    # al guardar con éxito se regresa al listado (con la confirmación
-    # visible ahí); si algo falla, se regresa a la misma pantalla de
-    # edición para que se pueda corregir e intentar de nuevo
-    if ($guardado_ok) {
+     if ($guardado_ok) {
         my $nombre_completo = "$usuario_objetivo->{nombre} $usuario_objetivo->{apellido_paterno}";
         print $cgi->redirect("permisos.pl?guardado=1&usuario=" . $cgi->escape($nombre_completo));
     } else {
