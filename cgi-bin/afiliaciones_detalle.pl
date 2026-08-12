@@ -12,7 +12,7 @@ use CGI;
 use lib './lib';
 use DB qw(conectar);
 use Auth qw(iniciar_sesion requerir_sesion tiene_permiso obtener_texto_sesion);
-use Plantilla qw(encabezado pie_pagina);
+use Plantilla qw(encabezado pie_pagina denegar_acceso);
 
 my $cgi = CGI->new;
 binmode(STDOUT, ":encoding(UTF-8)");
@@ -23,8 +23,9 @@ my $rol = $session->param('rol');
 my $id_asociacion = $session->param('id_asociacion');
 
 unless (tiene_permiso($dbh, $id_usuario, 'CONSULTA_AFILIACIONES', 'LECTURA')) {
-    print $cgi->header(-charset => 'utf-8', -status => '403 Forbidden');
-    print "Acceso no autorizado a este módulo.";
+    denegar_acceso(titulo => 'Detalle de Afiliación', usuario_nombre => obtener_texto_sesion($session, 'nombre'),
+                    rol => $rol, dbh => $dbh, id_usuario => $id_usuario, pagina_actual => 'CONSULTA_AFILIACIONES',
+                    mensaje => 'Acceso no autorizado a este módulo.');
     exit;
 }
 
@@ -59,7 +60,7 @@ unless ($r && $autorizado) {
     exit;
 }
 
-my %color_estatus = (NUEVA => 'secondary', EN_REVISION => 'warning', VERIFICADO => 'success');
+my %color_estatus = (NUEVA => 'secondary', EN_REVISION => 'warning', VERIFICADO => 'success', RECHAZADA => 'danger');
 my $color = $color_estatus{ $r->{estatus} } // 'secondary';
 
 print qq(

@@ -1,5 +1,20 @@
 #!/usr/bin/perl
 # ============================================================
+# bitacora.pl — Bitácora y Auditoría 
+# Fase 4: "Rol responsable: IEEQ o Administrador".
+#
+# Es de SOLO LECTURA: la bitácora "no puede modificarse ni
+# eliminarse", así que este
+# script ni siquiera tiene una acción de guardar.
+#
+# Alcance por rol:
+#   - SUPERADMIN / FUNCIONARIO_IEEQ: ven toda la bitácora
+#   - ADMIN_ASOCIACION: ve solo lo relacionado con su propia
+#     asociación (sus auxiliares y él mismo) 
+#   - AUXILIAR: sin acceso a este módulo (permiso NINGUNO)
+# ============================================================
+#!/usr/bin/perl
+# ============================================================
 # bitacora.pl — Bitácora y Auditoría (manual, sección 5.7 y
 # Fase 4, paso 12: "Rol responsable: IEEQ o Administrador").
 #
@@ -21,7 +36,7 @@ use CGI;
 use lib './lib';
 use DB qw(conectar);
 use Auth qw(iniciar_sesion requerir_sesion tiene_permiso obtener_texto_sesion);
-use Plantilla qw(encabezado pie_pagina);
+use Plantilla qw(encabezado pie_pagina denegar_acceso);
 
 my $cgi = CGI->new;
 binmode(STDOUT, ":encoding(UTF-8)");
@@ -32,8 +47,9 @@ my $rol = $session->param('rol');
 my $id_asociacion = $session->param('id_asociacion');
 
 unless (tiene_permiso($dbh, $id_usuario, 'BITACORA_AUDITORIA', 'LECTURA')) {
-    print $cgi->header(-charset => 'utf-8', -status => '403 Forbidden');
-    print "Acceso no autorizado a este módulo.";
+    denegar_acceso(titulo => 'Bitácora y Auditoría', usuario_nombre => obtener_texto_sesion($session, 'nombre'),
+                    rol => $rol, dbh => $dbh, id_usuario => $id_usuario, pagina_actual => 'BITACORA_AUDITORIA',
+                    mensaje => 'Acceso no autorizado a este módulo.');
     exit;
 }
 

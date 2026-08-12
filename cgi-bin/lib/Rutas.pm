@@ -5,12 +5,7 @@ package Rutas;
 #
 # Por defecto usa $Bin (carpeta del script en ejecución), pero
 # permite sobreescribirla con la variable de entorno
-# IEEQ_RUTA_UPLOADS. Esto es necesario en servidores donde el
-# DocumentRoot de Apache es un symlink hacia otra ruta real:
-# FindBin resuelve symlinks, así que $Bin puede no coincidir
-# con la carpeta que Apache realmente sirve, causando que los
-# archivos se guarden (o fallen por permisos) en un lugar
-# distinto al esperado.
+# IEEQ_RUTA_UPLOADS.
 # ============================================================
 
 use strict;
