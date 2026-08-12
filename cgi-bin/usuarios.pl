@@ -2,6 +2,14 @@
 # ============================================================
 # usuarios.pl — Gestión de Usuarios.
 #
+# Mismo patrón de 5 pasos que asociaciones.pl:
+#   1. sesión + permiso
+#   2. leer acción
+#   3. validar reglas de negocio (aquí la más importante es
+#      "quién puede crear a quién")
+#   4. ejecutar SQL
+#   5. bitácora + HTML
+#
 # Regla de negocio central:
 #   - SUPERADMIN crea ADMIN_ASOCIACION y FUNCIONARIO_IEEQ
 #   - ADMIN_ASOCIACION crea AUXILIAR, siempre en SU PROPIA
@@ -9,13 +17,13 @@
 # ============================================================
 use strict;
 use warnings;
-use utf8;                            
+use utf8;                            # el codigo fuente de este archivo esta en UTF-8
 use CGI;
 use lib './lib';
 use DB qw(conectar);
 use Auth qw(iniciar_sesion requerir_sesion tiene_permiso obtener_texto_sesion);
 use Bitacora qw(registrar);
-use Plantilla qw(encabezado pie_pagina);
+use Plantilla qw(encabezado pie_pagina denegar_acceso);
 use Digest::SHA qw(sha256_hex);
 
 my $cgi = CGI->new;
@@ -175,8 +183,8 @@ print pie_pagina();
 # ============================================================
 
 # Permisos "de fábrica" al crear un usuario, siguiendo el mismo
-# criterio que ya usamos en los datos de prueba del SQL. Quedan
-# editables después desde permisos.pl (Paso 6 del manual).
+# criterio que los datos de prueba del SQL. Quedan editables
+# después desde permisos.pl.
 sub asignar_permisos_por_defecto {
     my ($dbh, $id_usuario_nuevo, $tipo_usuario) = @_;
 
@@ -186,7 +194,7 @@ sub asignar_permisos_por_defecto {
             CEDULAS_AFILIACION        => 'ESCRITURA',
             GESTION_USUARIOS          => 'NINGUNO',
             GESTION_PERMISOS          => 'NINGUNO',
-            REGISTRO_AFILIACIONES     => 'NINGUNO', # el manual: "sin alta ni edición de afiliaciones"
+            REGISTRO_AFILIACIONES     => 'NINGUNO', # el Funcionariado IEEQ no captura ni edita afiliaciones
             _default                  => 'LECTURA',
         },
         ADMIN_ASOCIACION => {

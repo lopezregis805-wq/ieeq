@@ -1,24 +1,24 @@
 #!/usr/bin/perl
 # ============================================================
-# permisos.pl — Gestión de Permisos 
+# permisos.pl — Gestión de Permisos.
 #
 # Regla de negocio central:
 #   - SUPERADMIN asigna permisos a ADMIN_ASOCIACION y a
-#     FUNCIONARIO_IEEQ 
+#     FUNCIONARIO_IEEQ
 #   - ADMIN_ASOCIACION asigna permisos, pero SOLO a sus propios
-#     AUXILIARES, y no puede darles acceso a Gestión
-#     de Usuarios ni a Gestión de Permisos (evita que un
-#     auxiliar termine con más poder del que le corresponde)
+#     AUXILIARES, y no puede darles acceso a Gestión de Usuarios
+#     ni a Gestión de Permisos (evita que un auxiliar termine
+#     con más poder del que le corresponde)
 # ============================================================
 use strict;
 use warnings;
-use utf8;                            
+use utf8;                            # el codigo fuente de este archivo esta en UTF-8
 use CGI;
 use lib './lib';
 use DB qw(conectar);
 use Auth qw(iniciar_sesion requerir_sesion tiene_permiso obtener_texto_sesion);
 use Bitacora qw(registrar);
-use Plantilla qw(encabezado pie_pagina);
+use Plantilla qw(encabezado pie_pagina denegar_acceso);
 
 my $cgi = CGI->new;
 binmode(STDOUT, ":encoding(UTF-8)");
@@ -29,16 +29,18 @@ my $rol_sesion = $session->param('rol');
 my $id_asociacion_sesion = $session->param('id_asociacion');
 
 unless (tiene_permiso($dbh, $id_usuario, 'GESTION_PERMISOS', 'LECTURA')) {
-    print $cgi->header(-charset => 'utf-8', -status => '403 Forbidden');
-    print "Acceso no autorizado a este módulo.";
+    denegar_acceso(titulo => 'Gestión de Permisos', usuario_nombre => obtener_texto_sesion($session, 'nombre'),
+                    rol => $rol_sesion, dbh => $dbh, id_usuario => $id_usuario, pagina_actual => 'GESTION_PERMISOS',
+                    mensaje => 'Acceso no autorizado a este módulo.');
     exit;
 }
 my $puede_escribir = tiene_permiso($dbh, $id_usuario, 'GESTION_PERMISOS', 'ESCRITURA');
 
 # Módulos que un Auxiliar SÍ puede recibir, y los niveles que se
 # le pueden otorgar en cada uno. Cualquier módulo que no aparezca
-# aquí queda bloqueado (forzado a NINGUNO) para un Auxiliar.
-
+# aquí queda bloqueado (forzado a NINGUNO) para un Auxiliar, igual
+# que ya pasaba con Gestión de Usuarios y Gestión de Permisos —
+# evita que un auxiliar termine con más poder del que le corresponde.
 my %niveles_permitidos_para_auxiliar = (
     REGISTRO_AFILIACIONES => [qw(ESCRITURA LECTURA NINGUNO)],
     CONSULTA_AFILIACIONES => [qw(LECTURA NINGUNO)],
@@ -58,7 +60,7 @@ sub puede_editar_permisos_de {
 my $id_objetivo = $cgi->param('id');
 
 if ($cgi->request_method eq 'POST' && ($cgi->param('accion') // '') eq 'guardar') {
-    guardar_permisos($dbh, $cgi, $id_usuario, $rol_sesion, $id_asociacion_sesion, $puede_escribir);
+    guardar_permisos($dbh, $cgi, $session, $id_usuario, $rol_sesion, $id_asociacion_sesion, $puede_escribir);
     exit; # guardar_permisos ya redirige
 }
 
@@ -77,6 +79,12 @@ print pie_pagina();
 # ============================================================
 sub mostrar_listado {
     my ($dbh, $rol_sesion, $id_asociacion_sesion) = @_;
+
+    if ($cgi->param('guardado')) {
+        my $usuario_guardado = $cgi->escapeHTML($cgi->param('usuario') // '');
+        my $detalle = length($usuario_guardado) ? " de $usuario_guardado" : '';
+        print qq(<div class="alert alert-success">Permisos$detalle actualizados correctamente.</div>);
+    }
 
     my $sql = 'SELECT u.id_usuario, u.nombre, u.apellido_paterno, u.correo_electronico, u.tipo_usuario,
                       ap.nombre AS asociacion
@@ -130,14 +138,13 @@ sub mostrar_edicion {
 
     unless ($usuario_objetivo && puede_editar_permisos_de($rol_sesion, $id_asociacion_sesion, $usuario_objetivo)) {
         print '<div class="alert alert-danger">No puedes gestionar los permisos de este usuario.</div>';
+        mostrar_listado($dbh, $rol_sesion, $id_asociacion_sesion);
         return;
     }
 
     my $es_auxiliar_ajeno_bloqueo = ($usuario_objetivo->{tipo_usuario} eq 'AUXILIAR'); # aplica el bloqueo de módulos
 
-    if ($cgi->param('guardado')) {
-        print '<div class="alert alert-success">Permisos actualizados correctamente.</div>';
-    } elsif ($cgi->param('error')) {
+    if ($cgi->param('error')) {
         print '<div class="alert alert-danger">No se pudieron guardar los permisos. Intenta de nuevo; si el problema continúa, avisa al administrador del sistema.</div>';
     }
 
@@ -192,12 +199,13 @@ sub mostrar_edicion {
 }
 
 sub guardar_permisos {
-    my ($dbh, $cgi, $id_usuario, $rol_sesion, $id_asociacion_sesion, $puede_escribir) = @_;
+    my ($dbh, $cgi, $session, $id_usuario, $rol_sesion, $id_asociacion_sesion, $puede_escribir) = @_;
     my $id_objetivo = $cgi->param('id');
 
     unless ($puede_escribir) {
-        print $cgi->header(-charset => 'utf-8', -status => '403 Forbidden');
-        print "No tienes permiso de escritura en este módulo.";
+        denegar_acceso(titulo => 'Gestión de Permisos', usuario_nombre => obtener_texto_sesion($session, 'nombre'),
+                        rol => $rol_sesion, dbh => $dbh, id_usuario => $id_usuario, pagina_actual => 'GESTION_PERMISOS',
+                        mensaje => 'No tienes permiso de escritura en este módulo.');
         return;
     }
 
@@ -206,8 +214,9 @@ sub guardar_permisos {
     my $usuario_objetivo = $sth->fetchrow_hashref;
 
     unless ($usuario_objetivo && puede_editar_permisos_de($rol_sesion, $id_asociacion_sesion, $usuario_objetivo)) {
-        print $cgi->header(-charset => 'utf-8', -status => '403 Forbidden');
-        print "No puedes gestionar los permisos de este usuario.";
+        denegar_acceso(titulo => 'Gestión de Permisos', usuario_nombre => obtener_texto_sesion($session, 'nombre'),
+                        rol => $rol_sesion, dbh => $dbh, id_usuario => $id_usuario, pagina_actual => 'GESTION_PERMISOS',
+                        mensaje => 'No puedes gestionar los permisos de este usuario.');
         return;
     }
 
@@ -242,7 +251,10 @@ sub guardar_permisos {
     # si algo falló (ej. la base de datos rechazó un valor), se lo
     # avisamos al usuario en vez de dejar que la petición truene con un
     # error 500 sin explicación
-     if ($guardado_ok) {
+    # al guardar con éxito se regresa al listado (con la confirmación
+    # visible ahí); si algo falla, se regresa a la misma pantalla de
+    # edición para que se pueda corregir e intentar de nuevo
+    if ($guardado_ok) {
         my $nombre_completo = "$usuario_objetivo->{nombre} $usuario_objetivo->{apellido_paterno}";
         print $cgi->redirect("permisos.pl?guardado=1&usuario=" . $cgi->escape($nombre_completo));
     } else {

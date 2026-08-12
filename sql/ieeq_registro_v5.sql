@@ -1,6 +1,5 @@
 -- ============================================================
--- BASE DE DATOS: ieeq_registro  (v5 - Reglas de negocio de
--- Registro de Afiliaciones, sección 8 del manual)
+-- BASE DE DATOS: ieeq_registro  (v5)
 --
 -- Cambios respecto a v4 (ver notas "-- [v5]" a lo largo del
 -- archivo):
@@ -23,6 +22,17 @@
 --      sp_enviar_a_revision / sp_eliminar_afiliacion ya lo
 --      contemplan): la asociación puede corregir el registro y
 --      volver a mandarlo a revisión.
+--
+--   3. Permisos de SUPERADMIN sobre Registro/Verificación de
+--      Afiliaciones -> se acotan. SUPERADMIN tiene control absoluto
+--      del sistema (usuarios, permisos, asociaciones, padrón,
+--      cédulas, bitácora), pero NO de los procesos operativos de
+--      afiliación: ya no puede capturar afiliaciones
+--      (REGISTRO_AFILIACIONES = NINGUNO) ni aprobar/rechazar
+--      (VERIFICACION_AFILIACIONES = LECTURA, antes ESCRITURA); solo
+--      consulta. La regla se refuerza también del lado del código
+--      (afiliaciones_listado.pl / afiliaciones_nueva.pl ya no le dan
+--      un bypass de rol para gestionar registros ajenos).
 --
 -- El resto del esquema es idéntico a v4. Los siguientes cambios
 -- de negocio del formulario de Registro de Afiliaciones NO
@@ -69,9 +79,8 @@ USE ieeq_registro;
 -- CATÁLOGOS BASE
 -- ============================================================
 
--- Municipios de Querétaro (18 municipios, RF-03).
--- Este catálogo YA estaba bien normalizado en la v3: es la
--- forma correcta de modelar un dominio cerrado de valores.
+-- Municipios de Querétaro (18 municipios): dominio cerrado de
+-- valores, modelado como catálogo en vez de texto libre.
 CREATE TABLE municipios (
     id_municipio  INT AUTO_INCREMENT PRIMARY KEY,
     nombre        VARCHAR(100) NOT NULL UNIQUE
@@ -103,12 +112,9 @@ INSERT INTO modulos_sistema (clave, descripcion, orden) VALUES
 ('CEDULAS_AFILIACION',        'Generación de Cédulas de Afiliación', 8),
 ('BITACORA_AUDITORIA',        'Bitácora y Auditoría',                9),
 ('INICIO_SESION',             'Inicio de Sesión',                    10);
--- Nota: son exactamente los 10 módulos del Diagrama 3 del manual.
--- Ya no incluyo "Registro de Auxiliares" / "Verificación de
--- Auxiliares" porque el manual no los define como módulos.
 
 -- ============================================================
--- TABLA: asociaciones_politicas (RF-01)
+-- TABLA: asociaciones_politicas
 -- ============================================================
 CREATE TABLE asociaciones_politicas (
     id_asociacion          INT AUTO_INCREMENT PRIMARY KEY,
@@ -133,7 +139,7 @@ CREATE TABLE asociaciones_politicas (
 );
 
 -- ============================================================
--- TABLA: padron_electoral (RF-02)
+-- TABLA: padron_electoral
 -- ============================================================
 CREATE TABLE padron_electoral (
     id_padron         INT AUTO_INCREMENT PRIMARY KEY,
@@ -182,7 +188,7 @@ CREATE TABLE permisos_usuario (
 );
 
 -- ============================================================
--- TABLA: afiliaciones (RF-03)
+-- TABLA: afiliaciones
 -- ============================================================
 CREATE TABLE afiliaciones (
     id_afiliacion            INT AUTO_INCREMENT PRIMARY KEY,
@@ -223,7 +229,7 @@ CREATE TABLE afiliaciones (
 );
 
 -- ============================================================
--- TABLA: verificaciones_afiliaciones (RF-04)
+-- TABLA: verificaciones_afiliaciones
 -- ============================================================
 CREATE TABLE verificaciones_afiliaciones (
     id_verificacion    INT AUTO_INCREMENT PRIMARY KEY,
@@ -237,7 +243,7 @@ CREATE TABLE verificaciones_afiliaciones (
 );
 
 -- ============================================================
--- TABLA: bitacora (RF-06)
+-- TABLA: bitacora
 -- ============================================================
 CREATE TABLE bitacora (
     id_log               INT AUTO_INCREMENT PRIMARY KEY,
@@ -496,8 +502,20 @@ INSERT INTO usuarios (correo_electronico, contrasena, nombre, apellido_paterno, 
 ('pedro.aux@nuevorumbo.mx', SHA2('12345678',256), 'Pedro',     'Auxiliar',     'Vargas',  'AUXILIAR',         1,    1),
 ('laura.aux@nuevorumbo.mx', SHA2('12345678',256), 'Laura',     'Auxiliar',     'Cruz',    'AUXILIAR',         1,    1);
 
+-- [v5] SUPERADMIN tiene control absoluto del SISTEMA (usuarios, permisos,
+-- asociaciones, padrón, cédulas, bitácora) pero no de los PROCESOS
+-- operativos de afiliación: no registra afiliaciones, y en verificación
+-- solo consulta (no aprueba ni rechaza) — ese es el trabajo de la
+-- asociación y del Funcionariado IEEQ, respectivamente.
 INSERT INTO permisos_usuario (id_usuario, id_modulo, nivel)
-SELECT 1, id_modulo, 'ESCRITURA' FROM modulos_sistema;
+SELECT 1, id_modulo,
+       CASE clave
+           WHEN 'REGISTRO_AFILIACIONES'      THEN 'NINGUNO'
+           WHEN 'VERIFICACION_AFILIACIONES'  THEN 'LECTURA'
+           WHEN 'CONSULTA_AFILIACIONES'      THEN 'LECTURA'
+           ELSE 'ESCRITURA'
+       END
+FROM modulos_sistema;
 
 INSERT INTO permisos_usuario (id_usuario, id_modulo, nivel)
 SELECT 2, id_modulo,
@@ -546,17 +564,21 @@ INSERT INTO afiliaciones (
     acepta_afiliacion_libre, acepta_documentos, acepta_no_otro_partido, acepta_aviso_privacidad,
     estatus, id_registrador
 ) VALUES
+-- [v5] foto_anverso_ine/foto_reverso_ine/foto_persona/firma van en NULL: son
+-- registros de muestra, no capturas reales, y no existe ningún archivo físico
+-- detrás de esos nombres — dejar una ruta inventada solo produce un 404 al
+-- abrir el detalle. La pantalla ya maneja el caso NULL mostrando "(sin archivo)".
 (14,'JUAN','PÉREZ','GARCÍA','AV. CONSTITUCIÓN','123',NULL,'CENTRO','QUERÉTARO','QUERÉTARO','76000',
  'PRGJ850315HQRR0100','123456789012','987654321098',
- 'uploads/ine/anverso/ine_001.jpg','uploads/ine/reverso/ine_001.jpg','uploads/fotos/foto_001.jpg','uploads/firmas/firma_001.png',
+ NULL,NULL,NULL,NULL,
  1,1,1,1,'VERIFICADO',4),
 (14,'MARÍA','LÓPEZ','HERNÁNDEZ','CALLE HIDALGO','45','A','JARDINES','QUERÉTARO','QUERÉTARO','76100',
  'LOHM900722MQTR0600','234567890123',NULL,
- 'uploads/ine/anverso/ine_002.jpg','uploads/ine/reverso/ine_002.jpg','uploads/fotos/foto_002.jpg','uploads/firmas/firma_002.png',
+ NULL,NULL,NULL,NULL,
  1,1,1,1,'EN_REVISION',4),
 (16,'CARLOS','RODRÍGUEZ','SILVA','BLVD. BERNARDO QUINTANA','789',NULL,'PRADOS','SAN JUAN DEL RÍO','QUERÉTARO','76800',
  'ROSC781108HQTD0900','345678901234',NULL,
- 'uploads/ine/anverso/ine_003.jpg','uploads/ine/reverso/ine_003.jpg','uploads/fotos/foto_003.jpg','uploads/firmas/firma_003.png',
+ NULL,NULL,NULL,NULL,
  1,1,1,1,'NUEVA',5);
 
 INSERT INTO verificaciones_afiliaciones (id_afiliacion, id_verificador, decision, observaciones) VALUES
