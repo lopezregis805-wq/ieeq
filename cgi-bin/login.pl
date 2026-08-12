@@ -1,12 +1,14 @@
 #!/usr/bin/perl
 # ============================================================
-# login.pl — puerta de entrada al sistema 
+# login.pl — puerta de entrada al sistema: panel izquierdo con
+# degradado morado institucional + panel derecho con el
+# formulario y una caja de accesos de demostración.
 # ============================================================
 use strict;
 use warnings;
-use utf8;                           
+use utf8;                            # el codigo fuente de este archivo esta en UTF-8
 use CGI;
-use CGI::Carp qw(fatalsToBrowser); 
+use CGI::Carp qw(fatalsToBrowser); # TEMPORAL: para ver el error real, quitar después
 use lib './lib';
 use DB qw(conectar);
 use Auth qw(iniciar_sesion validar_credenciales);

@@ -1,8 +1,28 @@
 #!/usr/bin/perl
 # ============================================================
-# afiliaciones_nueva.pl — Registro de Afiliaciones. El proceso más complejo del
-# sistema: combina datos personales, evidencia fotográfica y
-# declaraciones legales.
+# afiliaciones_nueva.pl — Registro de Afiliaciones: combina
+# datos personales, evidencia fotográfica y declaraciones
+# legales. El proceso más complejo del sistema.
+#
+# También maneja la EDICIÓN (?accion=editar&id=N), llamado
+# desde afiliaciones_listado.pl, siguiendo el mismo patrón que
+# ya usamos en asociaciones.pl y usuarios.pl: un solo script
+# para alta y edición, en vez de duplicar el formulario.
+#
+# Reglas de negocio de esta pantalla:
+#   - las 4 casillas de aceptación son obligatorias; si falta
+#     una, el sistema NO permite guardar el registro
+#   - toda afiliación nueva inicia siempre en estatus "Nueva
+#     afiliación"
+#   - solo se puede editar mientras el estatus sea "Nueva
+#     afiliación" o "Rechazada" (un rechazo ya no regresa a
+#     "Nueva": queda en su propio estatus para dar seguimiento
+#     más puntual, pero sigue siendo editable y reenviable), y
+#     solo quien la capturó o el administrador de su asociación
+#     (regla ya aplicada también en la BD mediante el trigger
+#     trg_validar_edicion_afiliacion)
+#   - el lugar de afiliación debe ser uno de los 18 municipios
+#     autorizados del catálogo (no texto libre)
 # ============================================================
 use strict;
 use warnings;
@@ -45,9 +65,11 @@ if ($id_edicion) {
     $sth->execute($id_edicion);
     $registro_existente = $sth->fetchrow_hashref;
 
+    # SUPERADMIN y Funcionariado IEEQ NO entran aquí: tienen control del
+    # sistema pero no del proceso operativo de captura/corrección, que es
+    # exclusivo de quien la registró y del administrador de su asociación.
     my $autorizado = 0;
     if ($registro_existente && ($registro_existente->{estatus} eq 'NUEVA' || $registro_existente->{estatus} eq 'RECHAZADA')) {
-        $autorizado = 1 if $rol eq 'SUPERADMIN';
         $autorizado = 1 if $rol eq 'ADMIN_ASOCIACION' && $registro_existente->{id_asociacion_registrador} == $id_asociacion_sesion;
         $autorizado = 1 if $rol eq 'AUXILIAR' && $registro_existente->{id_registrador} == $id_usuario;
     }
@@ -80,7 +102,7 @@ if ($cgi->request_method eq 'POST') {
     my $clave_elector             = mayus($cgi->param('clave_elector'));
     my $ocr                       = mayus($cgi->param('ocr'));
 
-    # --- las 4 casillas obligatorias (regla critica del manual) ---
+    # --- las 4 casillas de aceptación son obligatorias ---
     my $acepta_libre      = $cgi->param('acepta_afiliacion_libre') ? 1 : 0;
     my $acepta_documentos = $cgi->param('acepta_documentos')       ? 1 : 0;
     my $acepta_no_otro    = $cgi->param('acepta_no_otro_partido')  ? 1 : 0;
@@ -179,8 +201,8 @@ if ($cgi->request_method eq 'POST') {
     #     firma se maneja aparte, más abajo: viene de un <canvas>
     #     donde la persona firma en pantalla, no de un archivo. ---
     # nada de esto se escribe a disco todavía: si falta cualquier otro
-    # dato en el formulario.
-    # 
+    # dato en el formulario, no queremos dejar fotos/firma huérfanas en
+    # uploads/ sin un registro en la base de datos que las respalde.
     # Solo se valida aquí; el guardado real ocurre más abajo, una vez
     # confirmado que el resto del formulario también es válido.
     my %rutas;
@@ -363,7 +385,10 @@ sub mostrar_formulario {
     $campo_invalido //= {};
 
     # clase, mensaje y resaltado de fondo para un campo con error. No
-    # dependemos solo de "is-invalid" para que el error sea imposible de ignorar y quede visible hasta
+    # dependemos solo de "is-invalid" (que Bootstrap solo pinta el borde,
+    # fácil de pasar por alto): forzamos "d-block" para que el mensaje
+    # siempre se muestre, y coloreamos de fondo todo el bloque del campo
+    # para que el error sea imposible de ignorar y quede visible hasta
     # que se vuelva a enviar el formulario corregido.
     my $clase_error = sub { $campo_invalido->{ $_[0] } ? 'is-invalid' : '' };
     my $mensaje_error = sub {
@@ -397,6 +422,7 @@ sub mostrar_formulario {
     print qq(
     <div class="card border-0 shadow-sm"><div class="card-body">
     <form id="form_afiliacion" method="post" action="afiliaciones_nueva.pl@{[ $r->{id_afiliacion} ? qq(?accion=editar&id=$r->{id_afiliacion}) : '' ]}" enctype="multipart/form-data" novalidate autocomplete="off">
+      @{[ $r->{id_afiliacion} ? qq(<input type="hidden" name="id" value="$r->{id_afiliacion}">) : '' ]}
 
       <h6 class="text-ieeq-primary mb-3">Identificación</h6>
       <div class="row g-3 mb-4">

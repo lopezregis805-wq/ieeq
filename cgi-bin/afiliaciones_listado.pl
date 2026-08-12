@@ -1,21 +1,25 @@
 #!/usr/bin/perl
 # ============================================================
-# afiliaciones_listado.pl — Consulta y Gestión del Listado
+# afiliaciones_listado.pl — Consulta y Gestión del Listado.
+# Pastillas de filtro por estatus, buscador, avatar con
+# iniciales, columna de "Flujo" (ciclo de vida) y acciones como
+# íconos.
 #
-# Regla de negocio central:
-#   - un Auxiliar solo ve (y solo puede editar/eliminar) las
-#     afiliaciones que ÉL MISMO capturó
-#   - un Admin de Asociación ve todas las de su asociación, y
-#     puede editar/eliminar cualquiera mientras esté en estatus
-#     "Nueva afiliación"
-#   - Funcionariado IEEQ y SUPERADMIN ven el listado completo;
-#     el Funcionariado solo puede CONSULTAR aquí (ni alta ni
-#     edición)
-#
+# Regla de negocio central: solo quien capturó o corrige un
+# registro puede editarlo/eliminarlo/reenviarlo a revisión
+# (puede_gestionar_afiliacion, abajo):
+#   - un Auxiliar solo gestiona las afiliaciones que ÉL MISMO
+#     capturó
+#   - un Admin de Asociación gestiona cualquiera de su propia
+#     asociación, mientras esté en estatus Nueva o Rechazada
+#   - Funcionariado IEEQ y SUPERADMIN ven el listado completo
+#     (control del sistema) pero NUNCA gestionan estos registros
+#     — no son quienes capturan ni corrigen afiliaciones, ese es
+#     el proceso operativo de la asociación
 # ============================================================
 use strict;
 use warnings;
-use utf8;                            
+use utf8;                            # el codigo fuente de este archivo esta en UTF-8
 use CGI;
 use lib './lib';
 use DB qw(conectar);
@@ -40,26 +44,42 @@ unless (tiene_permiso($dbh, $id_usuario, 'CONSULTA_AFILIACIONES', 'LECTURA')) {
 }
 
 # --- eliminar (soft delete vía procedimiento almacenado) ---
+# Los procedimientos sp_eliminar_afiliacion / sp_enviar_a_revision solo
+# validan el estatus, no de quién es el registro ni su asociación — por
+# eso esa autorización se verifica aquí ANTES de llamarlos, con la misma
+# regla que decide qué botones se muestran en el listado
+# (puede_gestionar_afiliacion, más abajo). Nunca hay que confiar en que
+# el botón simplemente no se haya mostrado.
 my @errores;
 if (($cgi->param('accion') // '') eq 'eliminar' && $cgi->request_method eq 'POST') {
     my $id = $cgi->param('id');
-    eval {
-        $dbh->do('CALL sp_eliminar_afiliacion(?, ?)', undef, $id, $id_usuario);
-        registrar(dbh => $dbh, id_usuario => $id_usuario, accion => 'ELIMINACION',
-                  clave_modulo => 'CONSULTA_AFILIACIONES', id_registro_afectado => $id,
-                  detalles => 'Afiliación eliminada (soft delete)', ip => $cgi->remote_addr);
-    };
-    push @errores, 'No se pudo eliminar: el registro ya no está en estatus "Nueva afiliación" o "Rechazada".' if $@;
+    my $registro_objetivo = obtener_registro_para_gestion($dbh, $id);
+    if ($registro_objetivo && puede_gestionar_afiliacion($rol, $id_usuario, $id_asociacion, $registro_objetivo)) {
+        eval {
+            $dbh->do('CALL sp_eliminar_afiliacion(?, ?)', undef, $id, $id_usuario);
+            registrar(dbh => $dbh, id_usuario => $id_usuario, accion => 'ELIMINACION',
+                      clave_modulo => 'CONSULTA_AFILIACIONES', id_registro_afectado => $id,
+                      detalles => 'Afiliación eliminada (soft delete)', ip => $cgi->remote_addr);
+        };
+        push @errores, 'No se pudo eliminar: el registro ya no está en estatus "Nueva afiliación" o "Rechazada".' if $@;
+    } else {
+        push @errores, 'No tienes permiso para eliminar este registro.';
+    }
 }
 
-# --- enviar a revisión (NUEVA -> EN_REVISION), para que aparezca
-#     en la cola del Funcionariado IEEQ ---
+# --- enviar a revisión (Nueva o Rechazada -> En revisión), para que
+#     aparezca en la cola del Funcionariado IEEQ ---
 if (($cgi->param('accion') // '') eq 'enviar_revision' && $cgi->request_method eq 'POST') {
     my $id = $cgi->param('id');
-    eval {
-        $dbh->do('CALL sp_enviar_a_revision(?, ?)', undef, $id, $id_usuario);
-    };
-    push @errores, 'No se pudo enviar a revisión: el registro ya no está en estatus "Nueva afiliación" o "Rechazada".' if $@;
+    my $registro_objetivo = obtener_registro_para_gestion($dbh, $id);
+    if ($registro_objetivo && puede_gestionar_afiliacion($rol, $id_usuario, $id_asociacion, $registro_objetivo)) {
+        eval {
+            $dbh->do('CALL sp_enviar_a_revision(?, ?)', undef, $id, $id_usuario);
+        };
+        push @errores, 'No se pudo enviar a revisión: el registro ya no está en estatus "Nueva afiliación" o "Rechazada".' if $@;
+    } else {
+        push @errores, 'No tienes permiso para enviar este registro a revisión.';
+    }
 }
 
 my $filtro_estatus = $cgi->param('filtro') // 'TODOS';
@@ -86,7 +106,37 @@ sub alcance_por_rol {
     my ($rol, $id_usuario, $id_asociacion) = @_;
     return ('a.id_registrador = ?', [$id_usuario])       if $rol eq 'AUXILIAR';
     return ('u.id_asociacion = ?', [$id_asociacion])      if $rol eq 'ADMIN_ASOCIACION';
-    return ('1=1', []); # FUNCIONARIO_IEEQ / SUPERADMIN: todo el sistema
+    return ('1=1', []); # FUNCIONARIO_IEEQ / SUPERADMIN: todo el sistema (solo consulta)
+}
+
+# ¿este rol puede editar/eliminar/reenviar ESTE registro? El Auxiliar
+# solo gestiona lo que él mismo capturó; el Admin de Asociación gestiona
+# lo de su propia asociación. SUPERADMIN y Funcionariado IEEQ tienen
+# control absoluto del sistema (usuarios, permisos, asociaciones) pero
+# no de este proceso operativo, así que aquí nunca regresan verdadero
+# — para eso está Verificación, que es su propio proceso con su propia
+# regla de autorización.
+sub puede_gestionar_afiliacion {
+    my ($rol, $id_usuario, $id_asociacion, $r) = @_;
+    return 0 unless $r->{estatus} eq 'NUEVA' || $r->{estatus} eq 'RECHAZADA';
+    return 1 if $rol eq 'ADMIN_ASOCIACION' && $r->{id_asociacion_registrador} == $id_asociacion;
+    return 1 if $rol eq 'AUXILIAR' && $r->{id_registrador} == $id_usuario;
+    return 0;
+}
+
+# Datos mínimos de un registro para decidir si puede gestionarse
+# (usado tanto por eliminar como por enviar_revision antes de llamar al
+# procedimiento correspondiente).
+sub obtener_registro_para_gestion {
+    my ($dbh, $id) = @_;
+    return undef unless $id;
+    my $sth = $dbh->prepare(
+        'SELECT a.estatus, a.id_registrador, u.id_asociacion AS id_asociacion_registrador
+         FROM afiliaciones a JOIN usuarios u ON u.id_usuario = a.id_registrador
+         WHERE a.id_afiliacion = ? AND a.fecha_eliminacion IS NULL'
+    );
+    $sth->execute($id);
+    return $sth->fetchrow_hashref;
 }
 
 sub mostrar_listado {
@@ -174,15 +224,9 @@ sub mostrar_listado {
 
         # ¿este usuario puede editar/eliminar ESTE registro? Rechazada se
         # gestiona igual que Nueva: se puede corregir y reenviar a revisión.
-        my $puede_gestionar = 0;
-        if ($r->{estatus} eq 'NUEVA' || $r->{estatus} eq 'RECHAZADA') {
-            $puede_gestionar = 1 if $rol eq 'SUPERADMIN';
-            $puede_gestionar = 1 if $rol eq 'ADMIN_ASOCIACION' && $r->{id_asociacion_registrador} == $id_asociacion;
-            $puede_gestionar = 1 if $rol eq 'AUXILIAR' && $r->{id_registrador} == $id_usuario;
-        }
+        my $puede_gestionar = puede_gestionar_afiliacion($rol, $id_usuario, $id_asociacion, $r);
 
-       
-        # --- Flujo: 3 puntos según el ciclo de vida---
+        # --- Flujo: 3 puntos según el ciclo de vida del registro ---
         my ($p1, $p2, $p3) = ('bg-secondary', 'bg-light', 'bg-light');
         if ($r->{estatus} eq 'EN_REVISION') { ($p1, $p2, $p3) = ('bg-ieeq-primary', 'bg-ieeq-primary', 'bg-light'); }
         if ($r->{estatus} eq 'VERIFICADO')  { ($p1, $p2, $p3) = ('bg-success', 'bg-success', 'bg-success'); }

@@ -1,17 +1,16 @@
 #!/usr/bin/perl
 # ============================================================
-# cedulas.pl — Generación de Cédulas de Afiliación 
+# cedulas.pl — Generación de Cédulas de Afiliación.
 #
-# solo se genera para registros ya
+# Regla de negocio: solo se genera para registros ya
 # "Verificado". Disponible solo para el Administrador de
-# Asociación y el Funcionariado IEEQ — "las personas auxiliares
-# no tienen este permiso"
+# Asociación y el Funcionariado IEEQ; las personas auxiliares no
+# tienen este permiso (NINGUNO por defecto en este módulo).
 #
 # La cédula es una vista HTML lista para imprimir (@media print
-# en el CSS), no un PDF generado en el servidor: es la forma más
-# simple de cumplir "formato imprimible" sin sumar dependencias
-# nuevas de Perl. El botón "Imprimir" del navegador ya permite
-# guardar como PDF directamente.
+# en el CSS), no un PDF generado en el servidor: el botón
+# "Imprimir" del navegador ya permite guardarla como PDF sin
+# sumar dependencias nuevas de Perl.
 # ============================================================
 use strict;
 use warnings;

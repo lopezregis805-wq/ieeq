@@ -1,26 +1,10 @@
 #!/usr/bin/perl
 # ============================================================
-# bitacora.pl — Bitácora y Auditoría 
-# Fase 4: "Rol responsable: IEEQ o Administrador".
+# bitacora.pl — Bitácora y Auditoría.
 #
-# Es de SOLO LECTURA: la bitácora "no puede modificarse ni
-# eliminarse", así que este
-# script ni siquiera tiene una acción de guardar.
-#
-# Alcance por rol:
-#   - SUPERADMIN / FUNCIONARIO_IEEQ: ven toda la bitácora
-#   - ADMIN_ASOCIACION: ve solo lo relacionado con su propia
-#     asociación (sus auxiliares y él mismo) 
-#   - AUXILIAR: sin acceso a este módulo (permiso NINGUNO)
-# ============================================================
-#!/usr/bin/perl
-# ============================================================
-# bitacora.pl — Bitácora y Auditoría (manual, sección 5.7 y
-# Fase 4, paso 12: "Rol responsable: IEEQ o Administrador").
-#
-# Es de SOLO LECTURA: la bitácora "no puede modificarse ni
-# eliminarse" (regla de negocio 8 del manual), así que este
-# script ni siquiera tiene una acción de guardar.
+# Es de SOLO LECTURA: la bitácora no puede modificarse ni
+# eliminarse, así que este script ni siquiera tiene una acción
+# de guardar.
 #
 # Alcance por rol:
 #   - SUPERADMIN / FUNCIONARIO_IEEQ: ven toda la bitácora

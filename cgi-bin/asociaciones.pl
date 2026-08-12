@@ -7,7 +7,7 @@
 # misma estructura de 5 pasos:
 #   1. sesión + permiso
 #   2. leer acción (listar / nuevo / guardar / editar)
-#   3. validar reglas de negocio y parámetros recibidos
+#   3. validar reglas de negocio
 #   4. ejecutar el SQL correspondiente
 #   5. registrar en bitácora y mostrar HTML
 #
@@ -18,14 +18,14 @@
 # ============================================================
 use strict;
 use warnings;
-use utf8;                            
+use utf8;                            # el codigo fuente de este archivo esta en UTF-8
 use CGI;
 use lib './lib';
 use DB qw(conectar);
 use Rutas qw($RUTA_UPLOADS);
 use Auth qw(iniciar_sesion requerir_sesion tiene_permiso obtener_texto_sesion);
 use Bitacora qw(registrar);
-use Plantilla qw(encabezado pie_pagina);
+use Plantilla qw(encabezado pie_pagina denegar_acceso);
 
 my $cgi = CGI->new;
 binmode(STDOUT, ":encoding(UTF-8)");   # lo que imprimimos tambien debe salir en UTF-8
@@ -96,7 +96,7 @@ if ($accion eq 'guardar' && $cgi->request_method eq 'POST') {
     push @errores, 'El nombre de la asociación es obligatorio.' unless length $nombre;
     push @errores, 'El representante legal es obligatorio.'     unless length $representante;
 
-    # --- regla crítica del manual: fecha obligatoria si "Sin registro" ---
+    # --- fecha obligatoria si el estatus es "Sin registro" ---
     if ($estatus eq 'SIN_REGISTRO' && !$fecha_perdida) {
         push @errores, 'La fecha de pérdida de registro es obligatoria cuando el estatus es "Sin registro".';
     }

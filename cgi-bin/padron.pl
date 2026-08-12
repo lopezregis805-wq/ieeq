@@ -1,26 +1,23 @@
 #!/usr/bin/perl
 # ============================================================
-# padron.pl — Padrón Electoral de Referencia 
-#
-# Regla de negocio: mantiene el dato
+# padron.pl — Padrón Electoral de Referencia: mantiene el dato
 # oficial del padrón, su fecha de corte y el % mínimo de
 # afiliados requerido. Solo debe existir UN registro "activo"
 # a la vez — al capturar uno nuevo, los anteriores se desactivan
 # (se guarda su historial, no se borran).
 #
-# Rol responsable: "IEEQ o administrador". En este
-# proyecto eso corresponde a SUPERADMIN y, cuando se le asigne
-# el permiso desde permisos.pl, también a FUNCIONARIO_IEEQ.
+# Acceso: SUPERADMIN y, cuando se le asigne el permiso desde
+# permisos.pl, también FUNCIONARIO_IEEQ.
 # ============================================================
 use strict;
 use warnings;
-use utf8;                            
+use utf8;                            # el codigo fuente de este archivo esta en UTF-8
 use CGI;
 use lib './lib';
 use DB qw(conectar);
 use Auth qw(iniciar_sesion requerir_sesion tiene_permiso obtener_texto_sesion);
 use Bitacora qw(registrar);
-use Plantilla qw(encabezado pie_pagina);
+use Plantilla qw(encabezado pie_pagina denegar_acceso);
 
 my $cgi = CGI->new;
 binmode(STDOUT, ":encoding(UTF-8)");
@@ -29,8 +26,9 @@ my $id_usuario = requerir_sesion($session, $cgi);
 my $dbh = conectar();
 
 unless (tiene_permiso($dbh, $id_usuario, 'PADRON_ELECTORAL', 'LECTURA')) {
-    print $cgi->header(-charset => 'utf-8', -status => '403 Forbidden');
-    print "Acceso no autorizado a este módulo.";
+    denegar_acceso(titulo => 'Padrón Electoral', usuario_nombre => obtener_texto_sesion($session, 'nombre'),
+                    rol => $session->param('rol'), dbh => $dbh, id_usuario => $id_usuario, pagina_actual => 'PADRON_ELECTORAL',
+                    mensaje => 'Acceso no autorizado a este módulo.');
     exit;
 }
 my $puede_escribir = tiene_permiso($dbh, $id_usuario, 'PADRON_ELECTORAL', 'ESCRITURA');
@@ -40,8 +38,9 @@ my $guardado_ok = 0;
 
 if ($cgi->request_method eq 'POST' && ($cgi->param('accion') // '') eq 'guardar') {
     unless ($puede_escribir) {
-        print $cgi->header(-charset => 'utf-8', -status => '403 Forbidden');
-        print "No tienes permiso de escritura en este módulo.";
+        denegar_acceso(titulo => 'Padrón Electoral', usuario_nombre => obtener_texto_sesion($session, 'nombre'),
+                        rol => $session->param('rol'), dbh => $dbh, id_usuario => $id_usuario, pagina_actual => 'PADRON_ELECTORAL',
+                        mensaje => 'No tienes permiso de escritura en este módulo.');
         exit;
     }
 
@@ -57,7 +56,7 @@ if ($cgi->request_method eq 'POST' && ($cgi->param('accion') // '') eq 'guardar'
 
     if (!@errores) {
         # Transacción: desactivar el/los anterior(es) e insertar el
-        # nuevo como único activo.
+        # nuevo como único activo, todo o nada.
         eval {
             $dbh->begin_work;
             $dbh->do('UPDATE padron_electoral SET activo = 0 WHERE activo = 1');

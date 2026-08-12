@@ -1,15 +1,21 @@
 #!/usr/bin/perl
 # ============================================================
-# afiliaciones_verificar.pl — Verificación de Afiliaciones
-# 
+# afiliaciones_verificar.pl — Verificación de Afiliaciones.
 #
-# Rol responsable: Funcionariado IEEQ
-# Generación de cédulas. Sin
-# alta ni edición de afiliaciones" + permiso de escritura
-# específico en este módulo para poder decidir.
+# Rol responsable: Funcionariado IEEQ — lectura global y
+# generación de cédulas, sin alta ni edición de afiliaciones,
+# más permiso de escritura específico en este módulo para poder
+# decidir (aprobar/rechazar).
 #
+# Dos pantallas en un solo script (mismo patrón ya usado):
+#   - accion=listar  (default): cola de pendientes (Nueva y
+#     En revisión), de TODO el sistema, sin filtrar por
+#     asociación — el Funcionariado ve todo.
+#   - accion=revisar&id=N: detalle + formulario de decisión.
+#     La decisión real la ejecuta sp_verificar_afiliacion, que
+#     ya se encarga de actualizar el estatus Y registrar la
+#     verificación en una sola transacción (ver el .sql).
 # ============================================================
-
 use strict;
 use warnings;
 use utf8;                            # el codigo fuente de este archivo esta en UTF-8
@@ -53,6 +59,9 @@ if ($accion eq 'decidir' && $cgi->request_method eq 'POST') {
     unless (grep { $_ eq $decision } qw(APROBADO RECHAZADO)) {
         push @errores, 'Decisión no válida.';
     }
+    if ($decision eq 'RECHAZADO' && !length($observaciones)) {
+        push @errores, 'Las observaciones son obligatorias al rechazar una afiliación: la asociación las necesita para saber qué corregir.';
+    }
 
     if (!@errores) {
         eval {
@@ -80,7 +89,7 @@ if (@errores) {
     print '</ul></div>';
 }
 
-if ($accion eq 'revisar' && $cgi->param('id')) {
+if (($accion eq 'revisar' || ($accion eq 'decidir' && @errores)) && $cgi->param('id')) {
     mostrar_pantalla_decision($dbh, $cgi->param('id'), $puede_decidir);
 } else {
     mostrar_cola_pendientes($dbh);
@@ -189,22 +198,43 @@ sub mostrar_pantalla_decision {
     );
 
     if ($puede_decidir) {
+        my $observaciones_previas = $cgi->escapeHTML($cgi->param('observaciones') // '');
         print qq(
-          <form method="post" action="afiliaciones_verificar.pl">
+          <form id="form_decision" method="post" action="afiliaciones_verificar.pl">
             <input type="hidden" name="accion" value="decidir">
             <input type="hidden" name="id" value="$r->{id_afiliacion}">
             <div class="mb-3">
               <label class="form-label">Observaciones</label>
-              <textarea class="form-control" name="observaciones" rows="3" placeholder="Notas sobre la verificación (opcional para aprobar, recomendado para rechazar)"></textarea>
+              <textarea id="campo_observaciones" class="form-control" name="observaciones" rows="3" placeholder="Notas sobre la verificación (opcional para aprobar, obligatorio para rechazar)">$observaciones_previas</textarea>
+              <div class="invalid-feedback d-block d-none" id="error_observaciones">Las observaciones son obligatorias al rechazar una afiliación.</div>
             </div>
             <div class="d-grid gap-2">
               <button type="submit" name="decision" value="APROBADO" class="btn btn-success"><i class="bi bi-check-circle me-1"></i>Aprobar — localizado en padrón</button>
-              <button type="submit" name="decision" value="RECHAZADO" class="btn btn-outline-danger"><i class="bi bi-x-circle me-1"></i>Rechazar — no localizado</button>
+              <button type="submit" name="decision" value="RECHAZADO" id="btn_rechazar" class="btn btn-outline-danger"><i class="bi bi-x-circle me-1"></i>Rechazar — no localizado</button>
             </div>
           </form>
           <div class="small text-muted mt-3">
             Al rechazar, el registro queda en estatus "Rechazada" para que la asociación pueda corregirlo y volver a enviarlo a revisión.
           </div>
+          <script>
+            (function() {
+              var boton = document.getElementById('btn_rechazar');
+              var campo = document.getElementById('campo_observaciones');
+              var error = document.getElementById('error_observaciones');
+              boton.addEventListener('click', function(ev) {
+                if (!campo.value.trim()) {
+                  ev.preventDefault();
+                  error.classList.remove('d-none');
+                  campo.classList.add('is-invalid');
+                  campo.focus();
+                }
+              });
+              campo.addEventListener('input', function() {
+                error.classList.add('d-none');
+                campo.classList.remove('is-invalid');
+              });
+            })();
+          </script>
         );
     } else {
         print '<p class="text-muted">Tu cuenta no tiene permiso de escritura en este módulo, solo consulta.</p>';

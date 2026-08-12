@@ -1,17 +1,18 @@
 #!/usr/bin/perl
 # ============================================================
-# dashboard.pl — panel principal, uno por rol. Cada rol ve tarjetas,
-# accesos rápidos y una lista de "capacidades" distintas.
+# dashboard.pl — panel principal, uno por rol: tarjetas de
+# estadísticas, accesos rápidos y una lista de capacidades
+# distinta para cada tipo de usuario.
 #
-# Diseño del código: en vez de escribir un bloque de HTML
-# distinto por cada rol (copy-paste x4), armamos una struct de
-# configuración por rol (@STATS, @ACCIONES, @CAPACIDADES...) y
-# UNA sola función que la dibuja. Si mañana se agrega un rol
-# nuevo, solo se agrega su entrada al hash de configuración.
+# En vez de un bloque de HTML distinto por rol, se arma una
+# struct de configuración por rol (tarjetas, acciones,
+# capacidades, alerta) y una sola función la dibuja. Agregar un
+# rol nuevo solo requiere agregar su entrada al hash de
+# configuración.
 # ============================================================
 use strict;
 use warnings;
-use utf8;                            
+use utf8;                            # el codigo fuente de este archivo esta en UTF-8
 use CGI;
 use lib './lib';
 use DB qw(conectar);
@@ -200,38 +201,24 @@ print encabezado(
     dbh => $dbh, id_usuario => $id_usuario, pagina_actual => '__INICIO__',
 );
 
-my $accion_principal = $cfg->{acciones}[0];
-my $accion_secundaria = $cfg->{acciones}[1];
-
+# Antes esta tarjeta repetía, en botones grandes, los mismos dos primeros
+# enlaces que ya están en el sidebar Y en la tarjeta "Acciones rápidas" de
+# más abajo — triple redundancia para el mismo destino. Se quitaron: el
+# menú lateral y "Acciones rápidas" ya cubren la navegación.
 print qq(
 <div class="card border-0 shadow-sm mb-4">
-  <div class="card-body d-flex flex-wrap justify-content-between align-items-center gap-3">
-    <div>
-      <div class="d-flex align-items-center gap-2 mb-1">
-        <h5 class="mb-0">¡Hola, $nombre!</h5>
-        <span class="badge bg-success-subtle text-success">Sesión Activa</span>
-      </div>
-      <div class="text-muted">
-        Bienvenido/a al Sistema de Registro de Afiliaciones del IEEQ.
-        Tu rol es <strong class="text-ieeq-primary">$rol_legible</strong>.
-      </div>
-      <span class="badge bg-secondary-subtle text-secondary-emphasis mt-2">$rol</span>
+  <div class="card-body">
+    <div class="d-flex align-items-center gap-2 mb-1">
+      <h5 class="mb-0">¡Hola, $nombre!</h5>
+      <span class="badge bg-success-subtle text-success">Sesión Activa</span>
     </div>
-);
-
-if ($accion_principal || $accion_secundaria) {
-    print '<div class="d-flex gap-2">';
-    if ($accion_principal) {
-        my ($icono, $enlace, $etiqueta) = @$accion_principal;
-        print qq(<a href="$enlace" class="btn btn-primary"><i class="bi bi-$icono me-1"></i>$etiqueta</a>);
-    }
-    if ($accion_secundaria) {
-        my ($icono, $enlace, $etiqueta) = @$accion_secundaria;
-        print qq(<a href="$enlace" class="btn btn-outline-secondary"><i class="bi bi-$icono me-1"></i>$etiqueta</a>);
-    }
-    print '</div>';
-}
-print '</div></div>';
+    <div class="text-muted">
+      Bienvenido/a al Sistema de Registro de Afiliaciones del IEEQ.
+      Tu rol es <strong class="text-ieeq-primary">$rol_legible</strong>.
+    </div>
+    <span class="badge bg-secondary-subtle text-secondary-emphasis mt-2">$rol</span>
+  </div>
+</div>);
 
 # --- Alerta contextual ---
 if (my $alerta = $cfg->{alerta}) {
