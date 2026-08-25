@@ -20,7 +20,9 @@ use CGI;
 use lib './lib';
 use DB qw(conectar);
 use Auth qw(iniciar_sesion requerir_sesion tiene_permiso obtener_texto_sesion);
-use Plantilla qw(encabezado pie_pagina denegar_acceso);
+use Plantilla qw(encabezado pie_pagina denegar_acceso paginacion);
+
+my $POR_PAGINA = 20;
 
 my $cgi = CGI->new;
 binmode(STDOUT, ":encoding(UTF-8)");
@@ -45,6 +47,8 @@ my $hasta = $cgi->param('hasta') // '';
 # El campo oculto "buscar" solo viaja cuando el formulario de filtros
 # se envió al menos una vez (aunque se dejen los filtros en blanco).
 my $buscar = $cgi->param('buscar') ? 1 : 0;
+my $pagina = int($cgi->param('pagina') // 1);
+$pagina = 1 if $pagina < 1;
 
 print encabezado(titulo => 'Bitácora y Auditoría',
                   usuario_nombre => obtener_texto_sesion($session, 'nombre'), rol => $rol,
@@ -52,7 +56,7 @@ print encabezado(titulo => 'Bitácora y Auditoría',
 
 mostrar_filtros($filtro_accion, $desde, $hasta);
 if ($buscar) {
-    mostrar_bitacora($dbh, $rol, $id_asociacion, $filtro_accion, $desde, $hasta);
+    mostrar_bitacora($dbh, $rol, $id_asociacion, $filtro_accion, $desde, $hasta, $pagina);
 } else {
     print '<div class="card border-0 shadow-sm"><div class="card-body text-center text-muted py-5">'
         . 'Selecciona los filtros que necesites (o déjalos en blanco para ver todo) y presiona '
@@ -99,33 +103,45 @@ sub mostrar_filtros {
 }
 
 sub mostrar_bitacora {
-    my ($dbh, $rol, $id_asociacion, $filtro_accion, $desde, $hasta) = @_;
+    my ($dbh, $rol, $id_asociacion, $filtro_accion, $desde, $hasta, $pagina) = @_;
 
-    my $sql = 'SELECT b.id_log, b.fecha, CONCAT(u.nombre, " ", u.apellido_paterno) AS usuario,
+    my $where = '1=1';
+    my @params;
+
+    if ($rol eq 'ADMIN_ASOCIACION') {
+        $where .= ' AND u.id_asociacion = ?';
+        push @params, $id_asociacion;
+    }
+    if (length $filtro_accion) {
+        $where .= ' AND b.accion = ?';
+        push @params, $filtro_accion;
+    }
+    if (length $desde) {
+        $where .= ' AND b.fecha >= ?';
+        push @params, "$desde 00:00:00";
+    }
+    if (length $hasta) {
+        $where .= ' AND b.fecha <= ?';
+        push @params, "$hasta 23:59:59";
+    }
+
+    my $sth_total = $dbh->prepare(
+        "SELECT COUNT(*) FROM bitacora b LEFT JOIN usuarios u ON u.id_usuario = b.id_usuario WHERE $where"
+    );
+    $sth_total->execute(@params);
+    my ($total_filas) = $sth_total->fetchrow_array;
+    my $total_paginas = $total_filas ? int(($total_filas + $POR_PAGINA - 1) / $POR_PAGINA) : 1;
+    $pagina = $total_paginas if $pagina > $total_paginas;
+    my $offset = ($pagina - 1) * $POR_PAGINA;
+
+    my $sql = "SELECT b.id_log, b.fecha, CONCAT(u.nombre, ' ', u.apellido_paterno) AS usuario,
                  u.tipo_usuario, b.accion, ms.descripcion AS modulo, b.id_registro_afectado, b.detalles, b.ip_origen
                FROM bitacora b
                LEFT JOIN usuarios u ON u.id_usuario = b.id_usuario
                LEFT JOIN modulos_sistema ms ON ms.id_modulo = b.id_modulo
-               WHERE 1=1';
-    my @params;
-
-    if ($rol eq 'ADMIN_ASOCIACION') {
-        $sql .= ' AND u.id_asociacion = ?';
-        push @params, $id_asociacion;
-    }
-    if (length $filtro_accion) {
-        $sql .= ' AND b.accion = ?';
-        push @params, $filtro_accion;
-    }
-    if (length $desde) {
-        $sql .= ' AND b.fecha >= ?';
-        push @params, "$desde 00:00:00";
-    }
-    if (length $hasta) {
-        $sql .= ' AND b.fecha <= ?';
-        push @params, "$hasta 23:59:59";
-    }
-    $sql .= ' ORDER BY b.fecha DESC LIMIT 200';
+               WHERE $where
+               ORDER BY b.fecha DESC
+               LIMIT $POR_PAGINA OFFSET $offset";
 
     my $sth = $dbh->prepare($sql);
     $sth->execute(@params);
@@ -163,5 +179,6 @@ sub mostrar_bitacora {
     }
     print '</tbody></table></div></div>';
 
-    print '<p class="text-muted small mt-2">Mostrando los 200 registros más recientes que coinciden con el filtro.</p>' if $filas == 200;
+    my $base_url = "bitacora.pl?buscar=1&accion_filtro=@{[ $cgi->escape($filtro_accion) ]}&desde=@{[ $cgi->escape($desde) ]}&hasta=@{[ $cgi->escape($hasta) ]}";
+    print paginacion(pagina_actual => $pagina, total_paginas => $total_paginas, total_filas => $total_filas, por_pagina => $POR_PAGINA, base_url => $base_url);
 }

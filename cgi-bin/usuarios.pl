@@ -23,8 +23,17 @@ use lib './lib';
 use DB qw(conectar);
 use Auth qw(iniciar_sesion requerir_sesion tiene_permiso obtener_texto_sesion);
 use Bitacora qw(registrar);
-use Plantilla qw(encabezado pie_pagina denegar_acceso);
+use Correo qw(enviar_correo);
+use Plantilla qw(encabezado pie_pagina denegar_acceso paginacion);
+
+my $POR_PAGINA = 20;
 use Digest::SHA qw(sha256_hex);
+
+# URL pública del sistema: se usa como liga de acceso en los correos de
+# notificación y como base para que el emblema de la asociación se vea
+# en el correo (una ruta relativa como "uploads/emblemas/x.jpg" no se
+# puede mostrar en un cliente de correo, necesita ser una URL completa).
+my $URL_SISTEMA = $ENV{IEEQ_URL_SISTEMA} || 'https://afiliaciones.ieeq.mx';
 
 my $cgi = CGI->new;
 binmode(STDOUT, ":encoding(UTF-8)");   # lo que imprimimos tambien debe salir en UTF-8
@@ -117,7 +126,12 @@ if ($accion eq 'guardar' && $cgi->request_method eq 'POST') {
     }
 
     if (!@errores) {
+        my $error_correo; # si falla el envío, se avisa pero NUNCA bloquea el alta/edición
         if ($id) {
+            # activo ANTES de la actualización, para detectar si esto es
+            # una baja (1 -> 0) y disparar el correo correspondiente.
+            my ($activo_anterior) = $dbh->selectrow_array('SELECT activo FROM usuarios WHERE id_usuario = ?', undef, $id);
+
             # --- edición: la contraseña solo se cambia si se escribió una nueva ---
             if (length($contrasena_plana) >= 8) {
                 $dbh->do(
@@ -136,6 +150,10 @@ if ($accion eq 'guardar' && $cgi->request_method eq 'POST') {
             registrar(dbh => $dbh, id_usuario => $id_usuario, accion => 'EDICION',
                       clave_modulo => 'GESTION_USUARIOS', id_registro_afectado => $id,
                       detalles => "Edición de usuario: $correo", ip => $cgi->remote_addr);
+
+            if ($activo_anterior && !$activo) {
+                $error_correo = enviar_correo_baja($dbh, $rol_sesion, $id_asociacion_sesion, $nombre, $apellido_paterno, $correo);
+            }
         } else {
             # --- alta ---
             $dbh->do(
@@ -152,8 +170,10 @@ if ($accion eq 'guardar' && $cgi->request_method eq 'POST') {
             registrar(dbh => $dbh, id_usuario => $id_usuario, accion => 'CREACION_USUARIO',
                       clave_modulo => 'GESTION_USUARIOS', id_registro_afectado => $nuevo_id,
                       detalles => "Alta de usuario: $correo ($tipo_usuario)", ip => $cgi->remote_addr);
+
+            $error_correo = enviar_correo_alta($dbh, $rol_sesion, $id_asociacion_sesion, $nombre, $apellido_paterno, $correo, $contrasena_plana);
         }
-        print $cgi->redirect('usuarios.pl');
+        print $cgi->redirect('usuarios.pl?guardado=1' . ($error_correo ? '&correo_error=' . $cgi->escape($error_correo) : ''));
         exit;
     }
     $accion = $cgi->param('id_usuario') ? 'editar' : 'nuevo';
@@ -164,6 +184,13 @@ print encabezado(titulo => 'Gestión de Usuarios',
                   usuario_nombre => obtener_texto_sesion($session, 'nombre'), rol => $session->param('rol'),
                   dbh => $dbh, id_usuario => $id_usuario, pagina_actual => 'GESTION_USUARIOS');
 
+if ($cgi->param('guardado')) {
+    print '<div class="alert alert-success">Usuario guardado correctamente.</div>';
+    if (my $correo_error = $cgi->param('correo_error')) {
+        print '<div class="alert alert-warning">El usuario se guardó, pero no se pudo enviar el correo de notificación: '
+            . $cgi->escapeHTML($correo_error) . '</div>';
+    }
+}
 if (@errores) {
     print '<div class="alert alert-danger"><ul class="mb-0">';
     print "<li>$_</li>" for @errores;
@@ -173,7 +200,9 @@ if (@errores) {
 if ($accion eq 'nuevo' || $accion eq 'editar') {
     mostrar_formulario($dbh, $cgi, \@roles_creables, $rol_sesion);
 } else {
-    mostrar_listado($dbh, $puede_escribir, $rol_sesion, $id_asociacion_sesion);
+    my $pagina = int($cgi->param('pagina') // 1);
+    $pagina = 1 if $pagina < 1;
+    mostrar_listado($dbh, $puede_escribir, $rol_sesion, $id_asociacion_sesion, $pagina);
 }
 
 print pie_pagina();
@@ -181,6 +210,63 @@ print pie_pagina();
 # ============================================================
 # Funciones
 # ============================================================
+
+# ¿quién firma la notificación? Un Admin de Asociación notifica a nombre
+# de SU PROPIA asociación (con su emblema); un SUPERADMIN no representa
+# a ninguna asociación en particular, así que firma a nombre del IEEQ.
+sub obtener_identidad_notificacion {
+    my ($dbh, $rol_sesion, $id_asociacion_sesion) = @_;
+    if ($rol_sesion eq 'ADMIN_ASOCIACION' && $id_asociacion_sesion) {
+        my ($nombre, $emblema) = $dbh->selectrow_array(
+            'SELECT nombre, emblema FROM asociaciones_politicas WHERE id_asociacion = ?', undef, $id_asociacion_sesion
+        );
+        return ($nombre, $emblema, 1) if $nombre;
+    }
+    return ('el Instituto Electoral del Estado de Querétaro (IEEQ)', undef, 0);
+}
+
+# Correo de alta de cuenta: incluye la contraseña recién asignada porque
+# así lo pidió el IEEQ para este flujo — la persona la cambia después
+# desde su propio criterio; el sistema no obliga un cambio en el primer
+# acceso.
+sub enviar_correo_alta {
+    my ($dbh, $rol_sesion, $id_asociacion_sesion, $nombre, $apellido_paterno, $correo, $contrasena_plana) = @_;
+    my ($nombre_org, $emblema, $es_asociacion) = obtener_identidad_notificacion($dbh, $rol_sesion, $id_asociacion_sesion);
+    my $frase_org = $es_asociacion ? "la asociación $nombre_org" : $nombre_org;
+    my $emblema_html = $emblema ? qq(<img src="$URL_SISTEMA/$emblema" style="height:60px;" alt="Emblema"><br><br>) : '';
+
+    my $html = qq(
+        $emblema_html
+        <p>Hola $nombre $apellido_paterno,</p>
+        <p>Por este medio te informamos que, $frase_org, ha creado un usuario en el sistema de registro
+        de afiliaciones para la persona usuaria con el correo electrónico <strong>$correo</strong>
+        y la contraseña <strong>$contrasena_plana</strong>.</p>
+        <p>Ingresa al sistema con tus credenciales de acceso en la url siguiente:
+        <a href="$URL_SISTEMA">$URL_SISTEMA</a></p>
+        <p>Atentamente</p>
+        <p>$nombre_org</p>
+    );
+    return enviar_correo(destinatario => $correo, asunto => 'Se creó tu cuenta en el Sistema de Registro de Afiliaciones', mensaje_html => $html);
+}
+
+# Correo de baja de cuenta: mismo remitente/emblema que el de alta, sin
+# incluir ningún dato sensible.
+sub enviar_correo_baja {
+    my ($dbh, $rol_sesion, $id_asociacion_sesion, $nombre, $apellido_paterno, $correo) = @_;
+    my ($nombre_org, $emblema, $es_asociacion) = obtener_identidad_notificacion($dbh, $rol_sesion, $id_asociacion_sesion);
+    my $frase_org = $es_asociacion ? "la asociación $nombre_org" : $nombre_org;
+    my $emblema_html = $emblema ? qq(<img src="$URL_SISTEMA/$emblema" style="height:60px;" alt="Emblema"><br><br>) : '';
+
+    my $html = qq(
+        $emblema_html
+        <p>Hola $nombre $apellido_paterno,</p>
+        <p>Por este medio te informamos que, $frase_org, ha dado de baja el usuario en el sistema de
+        registro de afiliaciones para la persona usuaria con el correo electrónico <strong>$correo</strong>.</p>
+        <p>Atentamente</p>
+        <p>$nombre_org</p>
+    );
+    return enviar_correo(destinatario => $correo, asunto => 'Tu cuenta en el Sistema de Registro de Afiliaciones fue dada de baja', mensaje_html => $html);
+}
 
 # Permisos "de fábrica" al crear un usuario, siguiendo el mismo
 # criterio que los datos de prueba del SQL. Quedan editables
@@ -190,8 +276,9 @@ sub asignar_permisos_por_defecto {
 
     my %reglas_por_modulo = (
         FUNCIONARIO_IEEQ => {
-            VERIFICACION_AFILIACIONES => 'ESCRITURA',
-            CEDULAS_AFILIACION        => 'ESCRITURA',
+            COMPULSA_AFILIACIONES     => 'ESCRITURA', # generar el archivo de compulsa al INE
+            CEDULAS_AFILIACION        => 'LECTURA',   # solo consulta, ya no genera
+            VERIFICACION_AFILIACIONES => 'NINGUNO',   # ahora es responsabilidad del Admin de Asociación
             GESTION_USUARIOS          => 'NINGUNO',
             GESTION_PERMISOS          => 'NINGUNO',
             REGISTRO_AFILIACIONES     => 'NINGUNO', # el Funcionariado IEEQ no captura ni edita afiliaciones
@@ -200,7 +287,8 @@ sub asignar_permisos_por_defecto {
         ADMIN_ASOCIACION => {
             GESTION_PERMISOS          => 'NINGUNO',
             PADRON_ELECTORAL          => 'LECTURA',
-            VERIFICACION_AFILIACIONES => 'NINGUNO',
+            VERIFICACION_AFILIACIONES => 'ESCRITURA', # valida las afiliaciones de su propia asociación
+            COMPULSA_AFILIACIONES     => 'NINGUNO',   # exclusivo de SUPERADMIN (consulta) y Funcionariado IEEQ
             _default                  => 'ESCRITURA',
         },
         AUXILIAR => {
@@ -222,22 +310,30 @@ sub asignar_permisos_por_defecto {
 }
 
 sub mostrar_listado {
-    my ($dbh, $puede_escribir, $rol_sesion, $id_asociacion_sesion) = @_;
+    my ($dbh, $puede_escribir, $rol_sesion, $id_asociacion_sesion, $pagina) = @_;
 
-    my $sql = 'SELECT u.*, ap.nombre AS asociacion_nombre
-               FROM usuarios u
-               LEFT JOIN asociaciones_politicas ap ON ap.id_asociacion = u.id_asociacion';
+    my $where;
     my @params;
-
     # Un Admin de Asociación solo ve a SUS auxiliares, no a todo el sistema.
     if ($rol_sesion eq 'ADMIN_ASOCIACION') {
-        $sql .= ' WHERE u.id_asociacion = ? AND u.tipo_usuario = "AUXILIAR"';
+        $where = 'u.id_asociacion = ? AND u.tipo_usuario = "AUXILIAR"';
         @params = ($id_asociacion_sesion);
     } else {
         # SUPERADMIN ve los usuarios que él mismo puede crear (no a otros SUPERADMIN)
-        $sql .= ' WHERE u.tipo_usuario IN ("ADMIN_ASOCIACION","FUNCIONARIO_IEEQ")';
+        $where = 'u.tipo_usuario IN ("ADMIN_ASOCIACION","FUNCIONARIO_IEEQ")';
     }
-    $sql .= ' ORDER BY u.tipo_usuario, u.nombre';
+
+    my ($total_filas) = $dbh->selectrow_array("SELECT COUNT(*) FROM usuarios u WHERE $where", undef, @params);
+    my $total_paginas = $total_filas ? int(($total_filas + $POR_PAGINA - 1) / $POR_PAGINA) : 1;
+    $pagina = $total_paginas if $pagina > $total_paginas;
+    my $offset = ($pagina - 1) * $POR_PAGINA;
+
+    my $sql = "SELECT u.*, ap.nombre AS asociacion_nombre
+               FROM usuarios u
+               LEFT JOIN asociaciones_politicas ap ON ap.id_asociacion = u.id_asociacion
+               WHERE $where
+               ORDER BY u.tipo_usuario, u.nombre
+               LIMIT $POR_PAGINA OFFSET $offset";
 
     my $sth = $dbh->prepare($sql);
     $sth->execute(@params);
@@ -270,6 +366,7 @@ sub mostrar_listado {
         );
     }
     print '</tbody></table></div></div>';
+    print paginacion(pagina_actual => $pagina, total_paginas => $total_paginas, total_filas => $total_filas, por_pagina => $POR_PAGINA, base_url => 'usuarios.pl');
 }
 
 sub mostrar_formulario {

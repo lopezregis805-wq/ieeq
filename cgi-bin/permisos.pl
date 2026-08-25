@@ -18,7 +18,9 @@ use lib './lib';
 use DB qw(conectar);
 use Auth qw(iniciar_sesion requerir_sesion tiene_permiso obtener_texto_sesion);
 use Bitacora qw(registrar);
-use Plantilla qw(encabezado pie_pagina denegar_acceso);
+use Plantilla qw(encabezado pie_pagina denegar_acceso paginacion);
+
+my $POR_PAGINA = 20;
 
 my $cgi = CGI->new;
 binmode(STDOUT, ":encoding(UTF-8)");
@@ -71,14 +73,17 @@ print encabezado(titulo => 'Gestión de Permisos',
 if ($id_objetivo) {
     mostrar_edicion($dbh, $id_objetivo, $rol_sesion, $id_asociacion_sesion, $puede_escribir);
 } else {
-    mostrar_listado($dbh, $rol_sesion, $id_asociacion_sesion);
+    my $pagina = int($cgi->param('pagina') // 1);
+    $pagina = 1 if $pagina < 1;
+    mostrar_listado($dbh, $rol_sesion, $id_asociacion_sesion, $pagina);
 }
 
 print pie_pagina();
 
 # ============================================================
 sub mostrar_listado {
-    my ($dbh, $rol_sesion, $id_asociacion_sesion) = @_;
+    my ($dbh, $rol_sesion, $id_asociacion_sesion, $pagina) = @_;
+    $pagina //= 1;
 
     if ($cgi->param('guardado')) {
         my $usuario_guardado = $cgi->escapeHTML($cgi->param('usuario') // '');
@@ -86,17 +91,25 @@ sub mostrar_listado {
         print qq(<div class="alert alert-success">Permisos$detalle actualizados correctamente.</div>);
     }
 
-    my $sql = 'SELECT u.id_usuario, u.nombre, u.apellido_paterno, u.correo_electronico, u.tipo_usuario,
+    my $where = 'u.tipo_usuario != "SUPERADMIN"';
+    my @params;
+    if ($rol_sesion eq 'ADMIN_ASOCIACION') {
+        $where .= ' AND u.tipo_usuario = "AUXILIAR" AND u.id_asociacion = ?';
+        push @params, $id_asociacion_sesion;
+    }
+
+    my ($total_filas) = $dbh->selectrow_array("SELECT COUNT(*) FROM usuarios u WHERE $where", undef, @params);
+    my $total_paginas = $total_filas ? int(($total_filas + $POR_PAGINA - 1) / $POR_PAGINA) : 1;
+    $pagina = $total_paginas if $pagina > $total_paginas;
+    my $offset = ($pagina - 1) * $POR_PAGINA;
+
+    my $sql = "SELECT u.id_usuario, u.nombre, u.apellido_paterno, u.correo_electronico, u.tipo_usuario,
                       ap.nombre AS asociacion
                FROM usuarios u
                LEFT JOIN asociaciones_politicas ap ON ap.id_asociacion = u.id_asociacion
-               WHERE u.tipo_usuario != "SUPERADMIN"';
-    my @params;
-    if ($rol_sesion eq 'ADMIN_ASOCIACION') {
-        $sql .= ' AND u.tipo_usuario = "AUXILIAR" AND u.id_asociacion = ?';
-        push @params, $id_asociacion_sesion;
-    }
-    $sql .= ' ORDER BY u.tipo_usuario, u.nombre';
+               WHERE $where
+               ORDER BY u.tipo_usuario, u.nombre
+               LIMIT $POR_PAGINA OFFSET $offset";
 
     my $sth = $dbh->prepare($sql);
     $sth->execute(@params);
@@ -127,6 +140,7 @@ sub mostrar_listado {
         print '<tr><td colspan="5" class="text-center text-muted py-4">No hay usuarios para gestionar.</td></tr>';
     }
     print '</tbody></table></div></div>';
+    print paginacion(pagina_actual => $pagina, total_paginas => $total_paginas, total_filas => $total_filas, por_pagina => $POR_PAGINA, base_url => 'permisos.pl');
 }
 
 sub mostrar_edicion {

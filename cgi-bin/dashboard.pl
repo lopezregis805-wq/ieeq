@@ -55,17 +55,18 @@ sub contar_afiliaciones {
     my $sth = $dbh->prepare(
         "SELECT
             COUNT(*) AS total,
-            SUM(a.estatus = 'NUEVA')       AS nuevas,
-            SUM(a.estatus = 'EN_REVISION')  AS en_revision,
-            SUM(a.estatus = 'VERIFICADO')  AS verificadas,
-            SUM(a.estatus = 'RECHAZADA')   AS rechazadas
+            SUM(a.estatus = 'REVISION_APE')  AS revision_ape,
+            SUM(a.estatus = 'RECHAZADA')     AS rechazadas,
+            SUM(a.estatus = 'COMPULSA_IEEQ') AS compulsa_ieeq,
+            SUM(a.estatus = 'COMPULSA_INE')  AS compulsa_ine
          FROM afiliaciones a
          JOIN usuarios u2 ON u2.id_usuario = a.id_registrador
          WHERE a.fecha_eliminacion IS NULL AND $filtro_sql"
     );
     $sth->execute(@filtro_params);
     my $stats = $sth->fetchrow_hashref;
-    for (qw(total nuevas en_revision verificadas rechazadas)) { $stats->{$_} //= 0; }
+    for (qw(total revision_ape rechazadas compulsa_ieeq compulsa_ine)) { $stats->{$_} //= 0; }
+    $stats->{validadas} = $stats->{compulsa_ieeq} + $stats->{compulsa_ine};
     return $stats;
 }
 
@@ -95,37 +96,37 @@ if (($rol eq 'AUXILIAR' || $rol eq 'ADMIN_ASOCIACION') && $id_asociacion) {
 my %config = (
     FUNCIONARIO_IEEQ => {
         tarjetas => [
-            ['morado',  'people',        $global->{total},       'Total Afiliaciones',    'en el sistema'],
-            ['azul',    'clock-history', $global->{en_revision}, 'Pendientes de verificar','esperan tu revisión'],
-            ['verde',   'check-circle',  $global->{verificadas}, 'Verificados por IEEQ',  'localizados en padrón'],
-            ['rojo',    'x-circle',      $global->{rechazadas},  'Rechazadas',            'no localizadas'],
+            ['morado',  'people',        $global->{total},         'Total Afiliaciones',   'en el sistema'],
+            ['azul',    'clock-history', $global->{compulsa_ieeq}, 'Listas para compulsa', 'ya validadas por su asociación'],
+            ['verde',   'check-circle',  $global->{compulsa_ine},  'Compulsa INE generada','ya enviadas al INE'],
+            ['rojo',    'x-circle',      $global->{rechazadas},    'Rechazadas',           'en revisión de las asociaciones'],
         ],
         acciones => [
-            ['check2-circle', 'afiliaciones_verificar.pl', 'Verificar Registros', 'Verificar en el padrón electoral'],
-            ['people',        'afiliaciones_listado.pl',   'Consultar Registros', 'Vista completa de afiliaciones'],
-            ['award',         'cedulas.pl',                'Generar Cédulas',     'Emitir cédulas de afiliados verificados'],
-            ['journal-text',  'bitacora.pl',                'Bitácora',           'Revisión de operaciones'],
+            ['file-earmark-arrow-up', 'afiliaciones_compulsa.pl', 'Para Compulsa',       'Generar archivo de compulsa al INE'],
+            ['people',                'afiliaciones_listado.pl',  'Consultar Registros', 'Vista completa de afiliaciones'],
+            ['award',                 'cedulas.pl',               'Cédulas',             'Consultar cédulas de afiliados'],
+            ['journal-text',          'bitacora.pl',               'Bitácora',           'Revisión de operaciones'],
         ],
         capacidades => [
-            [1, 'Consultar todos los registros', 'Vista completa del sistema en modo lectura'],
-            [1, 'Verificar afiliaciones',         'Localizar en el padrón electoral del estado'],
-            [1, 'Rechazar afiliaciones',          'Marcar como no localizadas en el padrón'],
-            [1, 'Generar cédulas',                'Emitir cédulas de afiliados verificados'],
-            [0, 'Capturar afiliaciones',          'Solo disponible para la Asociación'],
-            [0, 'Gestionar usuarios',             'Solo disponible para el Administrador'],
+            [1, 'Consultar todos los registros',      'Vista completa del sistema en modo lectura'],
+            [1, 'Generar archivo de compulsa al INE', 'Sobre afiliaciones ya validadas por su asociación'],
+            [1, 'Consultar cédulas',                  'Modo lectura'],
+            [0, 'Validar afiliaciones',               'Ahora es responsabilidad del Admin de Asociación'],
+            [0, 'Capturar afiliaciones',               'Solo disponible para la Asociación'],
+            [0, 'Gestionar usuarios',                  'Solo disponible para el Administrador'],
         ],
-        alerta => ($global->{en_revision} > 0)
-            ? ['info', "Tienes $global->{en_revision} afiliaciones pendientes de verificación",
-               'Estas afiliaciones están en "En revisión" y esperan tu validación contra el padrón electoral.']
+        alerta => ($global->{compulsa_ieeq} > 0)
+            ? ['info', "Hay $global->{compulsa_ieeq} afiliaciones listas para compulsa",
+               'Ya fueron validadas por su asociación y esperan que generes el archivo de compulsa al INE.']
             : undef,
         mostrar_avance => 0,
     },
     AUXILIAR => {
         tarjetas => [
-            ['morado',  'people',        $propio->{total},       'Mis Afiliaciones',       'capturas realizadas'],
-            ['naranja', 'clock-history', $propio->{nuevas},      'En edición (nuevas)',    'puedes editarlas todavía'],
-            ['verde',   'check-circle',  $propio->{verificadas}, 'Total verificadas',      'de tus capturas'],
-            ['rojo',    'x-circle',      $propio->{rechazadas},  'Rechazadas',             'corrígelas y reenvíalas'],
+            ['morado',  'people',        $propio->{total},        'Mis Afiliaciones',    'capturas realizadas'],
+            ['naranja', 'clock-history', $propio->{revision_ape}, 'En Revisión APE',     'puedes editarlas todavía'],
+            ['verde',   'check-circle',  $propio->{validadas},    'Validadas',           'de tus capturas'],
+            ['rojo',    'x-circle',      $propio->{rechazadas},   'Rechazadas',          'corrígelas y reenvíalas'],
         ],
         acciones => [
             ['person-plus', 'afiliaciones_nueva.pl',   'Nueva Afiliación', 'Capturar un nuevo ciudadano'],
@@ -133,43 +134,47 @@ my %config = (
         ],
         capacidades => [
             [1, 'Capturar afiliaciones',  'Registrar nuevos afiliados'],
-            [1, 'Editar mis capturas',    'Registros propios con estatus "Nueva" o "Rechazada"'],
-            [1, 'Eliminar mis capturas',  'Registros propios con estatus "Nueva" o "Rechazada"'],
-            [0, 'Enviar a revisión',      'Solo disponible para el Administrador'],
+            [1, 'Editar mis capturas',    'Registros propios con estatus "Revisión APE" o "Rechazada"'],
+            [1, 'Eliminar mis capturas',  'Registros propios con estatus "Revisión APE" o "Rechazada"'],
+            [0, 'Validar afiliaciones',   'Solo disponible para el Administrador de Asociación'],
             [0, 'Gestionar usuarios',     'Solo disponible para el Administrador'],
             [0, 'Generar cédulas',        'Solo disponible para Administrador e IEEQ'],
         ],
-        alerta => (($propio->{nuevas} + $propio->{rechazadas}) > 0)
-            ? ['warning', "$propio->{nuevas} de tus registros pueden ser editados" . ($propio->{rechazadas} ? " y $propio->{rechazadas} fueron rechazados" : ''),
-               'Tienes capturas con estatus "Nueva afiliación" o "Rechazada" que aún puedes modificar antes de enviarlas (o reenviarlas) a revisión.']
+        alerta => (($propio->{revision_ape} + $propio->{rechazadas}) > 0)
+            ? ['warning', "$propio->{revision_ape} de tus registros están en Revisión APE" . ($propio->{rechazadas} ? " y $propio->{rechazadas} fueron rechazados" : ''),
+               'Tienes capturas con estatus "Revisión APE" o "Rechazada" que aún puedes modificar antes (o después) de que el Admin de Asociación las valide.']
             : undef,
         mostrar_avance => 1,
     },
     ADMIN_ASOCIACION => {
         tarjetas => [
-            ['morado',  'people',        $propio->{total},       'Total Afiliaciones', 'en el sistema'],
-            ['naranja', 'clock-history', $propio->{nuevas},      'Pendientes de enviar','requieren tu acción'],
-            ['verde',   'check-circle',  $propio->{verificadas}, 'Verificadas',         sprintf('%.1f%% del total', $propio->{total} ? $propio->{verificadas}/$propio->{total}*100 : 0)],
-            ['rojo',    'x-circle',      $propio->{rechazadas},  'Rechazadas',          'corrígelas y reenvíalas'],
+            ['morado',  'people',        $propio->{total},        'Total Afiliaciones',   'en el sistema'],
+            ['naranja', 'clock-history', $propio->{revision_ape}, 'Pendientes de validar','requieren tu revisión'],
+            ['verde',   'check-circle',  $propio->{validadas},    'Validadas',            sprintf('%.1f%% del total', $propio->{total} ? $propio->{validadas}/$propio->{total}*100 : 0)],
+            ['rojo',    'x-circle',      $propio->{rechazadas},   'Rechazadas',           'corrígelas y reenvíalas'],
         ],
         acciones => [
-            ['person-plus', 'afiliaciones_nueva.pl',   'Nueva Afiliación',    'Capturar nuevo registro'],
-            ['list-ul',      'afiliaciones_listado.pl', 'Listado de Afiliados','Ver y gestionar registros'],
-            ['award',        'cedulas.pl',              'Generar Cédulas',     'Cédulas de afiliados verificados'],
-            ['people',       'usuarios.pl',             'Gestión de Usuarios', 'Administrar accesos al sistema'],
+            ['person-plus',   'afiliaciones_nueva.pl',     'Nueva Afiliación',    'Capturar nuevo registro'],
+            ['check2-circle', 'afiliaciones_verificar.pl', 'Verificación',        'Validar afiliaciones de tu asociación'],
+            ['list-ul',       'afiliaciones_listado.pl',   'Listado de Afiliados','Ver y gestionar registros'],
+            ['award',         'cedulas.pl',                'Generar Cédulas',     'Cédulas de afiliados validados'],
+            ['people',        'usuarios.pl',               'Gestión de Usuarios', 'Administrar accesos al sistema'],
         ],
         capacidades => [
-            [1, 'Capturar afiliaciones',  'Registrar nuevos afiliados'],
-            [1, 'Gestionar usuarios',     'Crear, editar y desactivar auxiliares'],
-            [1, 'Enviar a revisión IEEQ', 'Afiliaciones capturadas al Instituto'],
-            [1, 'Generar cédulas',        'Emitir cédulas de afiliados verificados'],
-            [1, 'Ver bitácora completa',  'Historial de operaciones del sistema'],
-            [0, 'Verificar en padrón',    'Solo disponible para Funcionariado IEEQ'],
+            [1, 'Capturar afiliaciones',   'Registrar nuevos afiliados'],
+            [1, 'Validar afiliaciones',    'Aprobar o rechazar capturas de tu propia asociación'],
+            [1, 'Gestionar usuarios',      'Crear, editar y desactivar auxiliares'],
+            [1, 'Generar cédulas',         'Emitir cédulas de afiliados validados'],
+            [1, 'Ver bitácora completa',   'Historial de operaciones del sistema'],
+            [0, 'Generar compulsa al INE', 'Solo disponible para Funcionariado IEEQ'],
         ],
-        alerta => ($propio->{rechazadas} > 0)
-            ? ['warning', "$propio->{rechazadas} de tus registros fueron rechazados",
-               'Revísalos, corrígelos y vuelve a enviarlos a revisión desde el Listado de Afiliados.']
-            : undef,
+        alerta => ($propio->{revision_ape} > 0)
+            ? ['warning', "Tienes $propio->{revision_ape} afiliaciones pendientes de validar",
+               'Revísalas desde Verificación antes de que puedan avanzar a compulsa.']
+            : (($propio->{rechazadas} > 0)
+                ? ['warning', "$propio->{rechazadas} de tus registros fueron rechazados",
+                   'Corrígelos y vuelve a validarlos desde el Listado de Afiliados.']
+                : undef),
         mostrar_avance => 1,
     },
     SUPERADMIN => {

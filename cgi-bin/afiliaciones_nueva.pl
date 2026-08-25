@@ -12,17 +12,16 @@
 # Reglas de negocio de esta pantalla:
 #   - las 4 casillas de aceptación son obligatorias; si falta
 #     una, el sistema NO permite guardar el registro
-#   - toda afiliación nueva inicia siempre en estatus "Nueva
-#     afiliación"
-#   - solo se puede editar mientras el estatus sea "Nueva
-#     afiliación" o "Rechazada" (un rechazo ya no regresa a
-#     "Nueva": queda en su propio estatus para dar seguimiento
-#     más puntual, pero sigue siendo editable y reenviable), y
-#     solo quien la capturó o el administrador de su asociación
-#     (regla ya aplicada también en la BD mediante el trigger
-#     trg_validar_edicion_afiliacion)
+#   - toda afiliación nueva inicia siempre en estatus "Revisión
+#     APE", pendiente de que el Admin de Asociación la valide
+#   - solo se puede editar mientras el estatus sea "Revisión APE"
+#     o "Rechazada", y solo quien la capturó o el administrador
+#     de su asociación (regla ya aplicada también en la BD
+#     mediante el trigger trg_validar_edicion_afiliacion)
 #   - el lugar de afiliación debe ser uno de los 18 municipios
 #     autorizados del catálogo (no texto libre)
+#   - la clave de elector no puede repetirse en ningún otro
+#     registro activo del sistema, sin importar la asociación
 # ============================================================
 use strict;
 use warnings;
@@ -69,14 +68,14 @@ if ($id_edicion) {
     # sistema pero no del proceso operativo de captura/corrección, que es
     # exclusivo de quien la registró y del administrador de su asociación.
     my $autorizado = 0;
-    if ($registro_existente && ($registro_existente->{estatus} eq 'NUEVA' || $registro_existente->{estatus} eq 'RECHAZADA')) {
+    if ($registro_existente && ($registro_existente->{estatus} eq 'REVISION_APE' || $registro_existente->{estatus} eq 'RECHAZADA')) {
         $autorizado = 1 if $rol eq 'ADMIN_ASOCIACION' && $registro_existente->{id_asociacion_registrador} == $id_asociacion_sesion;
         $autorizado = 1 if $rol eq 'AUXILIAR' && $registro_existente->{id_registrador} == $id_usuario;
     }
     unless ($autorizado) {
         denegar_acceso(titulo => 'Registro de Afiliaciones', usuario_nombre => obtener_texto_sesion($session, 'nombre'),
                         rol => $rol, dbh => $dbh, id_usuario => $id_usuario, pagina_actual => 'REGISTRO_AFILIACIONES',
-                        mensaje => 'Este registro no existe, ya no está en estatus "Nueva afiliación" o "Rechazada", o no te pertenece.');
+                        mensaje => 'Este registro no existe, ya no está en estatus "Revisión APE" o "Rechazada", o no te pertenece.');
         exit;
     }
 }
@@ -145,16 +144,35 @@ if ($cgi->request_method eq 'POST') {
         push @errores, 'El apellido paterno es obligatorio.';
         $campo_invalido{apellido_paterno} = 'El apellido paterno es obligatorio.';
     }
+    # Estructura real de la clave de elector: 6 letras + fecha de
+    # nacimiento AAMMDD (6 dígitos) + 2 dígitos + 1 letra + 3 dígitos = 18.
     if (!length $clave_elector) {
         push @errores, 'La clave de elector es obligatoria.';
         $campo_invalido{clave_elector} = 'La clave de elector es obligatoria.';
-    } elsif ($clave_elector !~ /^[A-Z0-9]{18}$/) {
-        push @errores, 'La clave de elector debe tener exactamente 18 caracteres (solo letras y números).';
-        $campo_invalido{clave_elector} = 'Debe tener exactamente 18 caracteres, solo letras y números (verifica en la credencial). Tiene ' . length($clave_elector) . '.';
+    } elsif ($clave_elector !~ /^[A-Z]{6}\d{6}\d{2}[A-Z]\d{3}$/) {
+        push @errores, 'La clave de elector no tiene el formato correcto (6 letras + fecha de nacimiento AAMMDD + 2 dígitos + 1 letra + 3 dígitos = 18 caracteres).';
+        $campo_invalido{clave_elector} = 'Formato esperado: 6 letras, AAMMDD de nacimiento, 2 dígitos, 1 letra y 3 dígitos (18 caracteres). Verifica en la credencial.';
+    } else {
+        # de-duplicación: la misma clave de elector no puede repetirse en
+        # ningún otro registro activo del sistema, sin importar de qué
+        # asociación sea — una persona solo puede estar afiliada una vez.
+        my $sth_dup = $dbh->prepare(
+            'SELECT id_afiliacion FROM afiliaciones WHERE clave_elector = ? AND fecha_eliminacion IS NULL AND id_afiliacion != ?'
+        );
+        $sth_dup->execute($clave_elector, $id_edicion || 0);
+        if ($sth_dup->fetchrow_array) {
+            push @errores, 'Ya existe una afiliación activa con esta clave de elector (en esta o en otra asociación).';
+            $campo_invalido{clave_elector} = 'Esta clave de elector ya está registrada en otra afiliación activa.';
+        }
     }
-    unless (length $ocr) {
-        push @errores, 'El número OCR es obligatorio.';
-        $campo_invalido{ocr} = 'El número OCR es obligatorio.';
+    unless ($ocr =~ /^\d{13}$/) {
+        if (length $ocr) {
+            push @errores, 'El número OCR debe tener exactamente 13 dígitos numéricos.';
+            $campo_invalido{ocr} = 'Debe tener exactamente 13 dígitos, solo números. Tiene ' . length($ocr) . '.';
+        } else {
+            push @errores, 'El número OCR es obligatorio.';
+            $campo_invalido{ocr} = 'El número OCR es obligatorio.';
+        }
     }
 
     unless (length $domicilio_calle) {
@@ -330,7 +348,7 @@ if ($cgi->request_method eq 'POST') {
                     foto_anverso_ine, foto_reverso_ine, foto_persona, firma,
                     acepta_afiliacion_libre, acepta_documentos, acepta_no_otro_partido, acepta_aviso_privacidad,
                     estatus, id_registrador
-                 ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,\'NUEVA\',?)',
+                 ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,\'REVISION_APE\',?)',
                 undef,
                 $id_municipio, $nombre, $apellido_paterno, $apellido_materno,
                 $domicilio_calle, $domicilio_numero, $domicilio_numero_interior, $domicilio_colonia, $domicilio_municipio,
@@ -448,7 +466,7 @@ sub mostrar_formulario {
         </div>
         <div class="col-md-4 @{[ $grupo_error->('ocr') ]}">
           <label class="form-label">Número OCR</label>
-          <input class="form-control text-uppercase @{[ $clase_error->('ocr') ]}" name="ocr" maxlength="18" value="@{[ $r->{ocr} // '' ]}" required>
+          <input class="form-control text-uppercase @{[ $clase_error->('ocr') ]}" name="ocr" maxlength="13" value="@{[ $r->{ocr} // '' ]}" required>
           @{[ $mensaje_error->('ocr') ]}
         </div>
       </div>
