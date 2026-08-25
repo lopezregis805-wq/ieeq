@@ -9,30 +9,35 @@
 --      número exterior (columna domicilio_numero, ya existía) de
 --      número interior (opcional, para departamentos/interiores).
 --
---   2. afiliaciones.estatus -> se agrega el valor 'RECHAZADA'.
---      Antes, al rechazar una verificación, sp_verificar_afiliacion
---      regresaba el registro a 'NUEVA' (mismo estatus que uno recién
---      capturado), lo que no permitía distinguir a simple vista un
---      registro nunca revisado de uno ya rechazado. Ahora el rechazo
---      deja el registro en 'RECHAZADA', su propio estatus, para dar
---      seguimiento más puntual y no confundir a las asociaciones.
---      'RECHAZADA' se comporta igual que 'NUEVA' para efectos de
---      edición, reenvío a revisión y eliminación (trigger
---      trg_validar_edicion_afiliacion y los procedimientos
---      sp_enviar_a_revision / sp_eliminar_afiliacion ya lo
---      contemplan): la asociación puede corregir el registro y
---      volver a mandarlo a revisión.
+--   2. Ciclo de vida de afiliaciones.estatus (ver notas "-- [v6]"):
+--      REVISION_APE (recién capturada o corregida, pendiente de
+--      validación) -> COMPULSA_IEEQ (el Admin de Asociación la
+--      validó) o RECHAZADA (el Admin de Asociación encontró errores;
+--      el Auxiliar corrige y vuelve a REVISION_APE) -> COMPULSA_INE
+--      (el Funcionariado IEEQ ya la incluyó en un archivo de
+--      compulsa al INE, sp_marcar_compulsa_ine). REVISION_APE y
+--      RECHAZADA se comportan igual para efectos de edición y
+--      eliminación (trg_validar_edicion_afiliacion,
+--      sp_eliminar_afiliacion). sp_regresar_a_revision permite al
+--      Admin de Asociación regresar un registro de COMPULSA_IEEQ a
+--      REVISION_APE (subsanar antes de que IEEQ genere el archivo).
 --
---   3. Permisos de SUPERADMIN sobre Registro/Verificación de
---      Afiliaciones -> se acotan. SUPERADMIN tiene control absoluto
---      del sistema (usuarios, permisos, asociaciones, padrón,
---      cédulas, bitácora), pero NO de los procesos operativos de
---      afiliación: ya no puede capturar afiliaciones
---      (REGISTRO_AFILIACIONES = NINGUNO) ni aprobar/rechazar
---      (VERIFICACION_AFILIACIONES = LECTURA, antes ESCRITURA); solo
---      consulta. La regla se refuerza también del lado del código
---      (afiliaciones_listado.pl / afiliaciones_nueva.pl ya no le dan
---      un bypass de rol para gestionar registros ajenos).
+--   3. Permisos por rol sobre el proceso de afiliación -> se acotan
+--      por responsabilidad, no por jerarquía:
+--      - SUPERADMIN: control absoluto del sistema (usuarios,
+--        permisos, asociaciones, padrón, bitácora), pero solo
+--        consulta (LECTURA) en Verificación, Listado, Cédulas y
+--        Compulsa — nunca ESCRITURA en el proceso operativo.
+--      - ADMIN_ASOCIACION: valida/rechaza las afiliaciones de su
+--        propia asociación (VERIFICACION_AFILIACIONES = ESCRITURA;
+--        antes era exclusivo del Funcionariado IEEQ).
+--      - FUNCIONARIO_IEEQ: ya no verifica afiliaciones contra el
+--        padrón (VERIFICACION_AFILIACIONES = NINGUNO); su rol pasa a
+--        ser generar el archivo de compulsa al INE
+--        (COMPULSA_AFILIACIONES = ESCRITURA) sobre lo que la
+--        asociación ya validó.
+--      La regla se refuerza también del lado del código (los scripts
+--      no dan bypass de rol para gestionar registros ajenos).
 --
 -- El resto del esquema es idéntico a v4. Los siguientes cambios
 -- de negocio del formulario de Registro de Afiliaciones NO
@@ -110,8 +115,9 @@ INSERT INTO modulos_sistema (clave, descripcion, orden) VALUES
 ('CONSULTA_AFILIACIONES',     'Consulta y Gestión del Listado',      6),
 ('VERIFICACION_AFILIACIONES', 'Verificación de Afiliaciones',        7),
 ('CEDULAS_AFILIACION',        'Generación de Cédulas de Afiliación', 8),
-('BITACORA_AUDITORIA',        'Bitácora y Auditoría',                9),
-('INICIO_SESION',             'Inicio de Sesión',                    10);
+('COMPULSA_AFILIACIONES',     'Afiliaciones para Compulsa',          9),
+('BITACORA_AUDITORIA',        'Bitácora y Auditoría',                10),
+('INICIO_SESION',             'Inicio de Sesión',                    11);
 
 -- ============================================================
 -- TABLA: asociaciones_politicas
@@ -127,6 +133,7 @@ CREATE TABLE asociaciones_politicas (
     codigo_postal          VARCHAR(10),
     correo_electronico     VARCHAR(150),
     telefono               VARCHAR(15),
+    sitio_web              VARCHAR(255), -- [v6] para el aviso de privacidad de la cédula
     emblema                VARCHAR(255),
     fecha_aprobacion       DATE,
     fecha_perdida_registro DATE,
@@ -215,7 +222,12 @@ CREATE TABLE afiliaciones (
     acepta_documentos         TINYINT(1) NOT NULL DEFAULT 0,
     acepta_no_otro_partido    TINYINT(1) NOT NULL DEFAULT 0,
     acepta_aviso_privacidad   TINYINT(1) NOT NULL DEFAULT 0,
-    estatus                   ENUM('NUEVA','EN_REVISION','VERIFICADO','RECHAZADA') NOT NULL DEFAULT 'NUEVA', -- [v5]
+    -- [v6] Flujo: REVISION_APE (recién capturada/corregida, pendiente de que
+    -- el Admin de Asociación la valide) -> COMPULSA_IEEQ (validada por el
+    -- Admin de Asociación) o RECHAZADA (el Admin de Asociación encontró
+    -- errores, el Auxiliar corrige y vuelve a REVISION_APE) -> COMPULSA_INE
+    -- (el Funcionariado IEEQ ya la incluyó en un archivo de compulsa al INE).
+    estatus                   ENUM('REVISION_APE','RECHAZADA','COMPULSA_IEEQ','COMPULSA_INE') NOT NULL DEFAULT 'REVISION_APE',
     id_registrador            INT NOT NULL,
     fecha_creacion            DATETIME NOT NULL DEFAULT NOW(),
     fecha_actualizacion       DATETIME NULL ON UPDATE NOW(),
@@ -255,7 +267,8 @@ CREATE TABLE bitacora (
                             'CONSULTA',
                             'PERMISO_ASIGNADO',
                             'CREACION_USUARIO',
-                            'GENERACION_CEDULA'
+                            'GENERACION_CEDULA',
+                            'COMPULSA_GENERADA','REGRESO_REVISION'
                          ) NOT NULL,
     id_modulo             INT NULL,
     id_registro_afectado  INT NULL,
@@ -334,10 +347,10 @@ SELECT
     MAX(pe.porcentaje_minimo) AS porcentaje_minimo,
     ROUND(MAX(pe.total_padron) * (MAX(pe.porcentaje_minimo) / 100)) AS minimo_requerido,
     COUNT(a.id_afiliacion) AS total_afiliaciones,
-    SUM(a.estatus = 'VERIFICADO')  AS verificadas,
-    SUM(a.estatus = 'EN_REVISION') AS en_revision,
-    SUM(a.estatus = 'NUEVA')       AS nuevas,
-    SUM(a.estatus = 'RECHAZADA')   AS rechazadas -- [v5]
+    SUM(a.estatus = 'REVISION_APE')  AS revision_ape,
+    SUM(a.estatus = 'RECHAZADA')     AS rechazadas,
+    SUM(a.estatus = 'COMPULSA_IEEQ') AS compulsa_ieeq,
+    SUM(a.estatus = 'COMPULSA_INE')  AS compulsa_ine
 FROM asociaciones_politicas ap
 LEFT JOIN usuarios u   ON u.id_asociacion = ap.id_asociacion
 LEFT JOIN afiliaciones a ON a.id_registrador = u.id_usuario AND a.fecha_eliminacion IS NULL
@@ -349,13 +362,13 @@ GROUP BY ap.id_asociacion, ap.nombre;
 -- ============================================================
 DELIMITER //
 
-CREATE TRIGGER trg_proteger_afiliacion_verificada
+CREATE TRIGGER trg_proteger_afiliacion_compulsa
 BEFORE DELETE ON afiliaciones
 FOR EACH ROW
 BEGIN
-    IF OLD.estatus = 'VERIFICADO' THEN
+    IF OLD.estatus IN ('COMPULSA_IEEQ', 'COMPULSA_INE') THEN
         SIGNAL SQLSTATE '45000'
-        SET MESSAGE_TEXT = 'No se puede eliminar una afiliacion ya verificada';
+        SET MESSAGE_TEXT = 'No se puede eliminar una afiliacion que ya esta en compulsa';
     END IF;
 END //
 
@@ -363,12 +376,12 @@ CREATE TRIGGER trg_validar_edicion_afiliacion
 BEFORE UPDATE ON afiliaciones
 FOR EACH ROW
 BEGIN
-    -- [v5] Rechazada se edita igual que Nueva: permite corregir y reenviar.
-    IF OLD.estatus NOT IN ('NUEVA', 'RECHAZADA') AND (
+    -- Rechazada se edita igual que Revision APE: permite corregir y reenviar.
+    IF OLD.estatus NOT IN ('REVISION_APE', 'RECHAZADA') AND (
         NEW.nombre != OLD.nombre OR NEW.apellido_paterno != OLD.apellido_paterno
     ) THEN
         SIGNAL SQLSTATE '45000'
-        SET MESSAGE_TEXT = 'Solo se pueden editar afiliaciones con estatus Nueva afiliacion o Rechazada';
+        SET MESSAGE_TEXT = 'Solo se pueden editar afiliaciones con estatus Revision APE o Rechazada';
     END IF;
 END //
 
@@ -379,32 +392,8 @@ DELIMITER ;
 -- ============================================================
 DELIMITER //
 
-CREATE PROCEDURE sp_enviar_a_revision(
-    IN p_id_afiliacion INT,
-    IN p_id_usuario    INT
-)
-BEGIN
-    DECLARE v_estatus ENUM('NUEVA','EN_REVISION','VERIFICADO','RECHAZADA');
-
-    SELECT estatus INTO v_estatus FROM afiliaciones WHERE id_afiliacion = p_id_afiliacion;
-
-    IF v_estatus IS NULL THEN
-        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'La afiliacion no existe';
-    ELSEIF v_estatus NOT IN ('NUEVA', 'RECHAZADA') THEN -- [v5]
-        SIGNAL SQLSTATE '45000'
-        SET MESSAGE_TEXT = 'Solo se puede enviar a revision una afiliacion en estatus Nueva afiliacion o Rechazada';
-    END IF;
-
-    UPDATE afiliaciones
-    SET estatus = 'EN_REVISION', id_usuario_actualizacion = p_id_usuario
-    WHERE id_afiliacion = p_id_afiliacion;
-
-    INSERT INTO bitacora(id_usuario, accion, id_modulo, id_registro_afectado, detalles)
-    VALUES(p_id_usuario, 'EDICION',
-           (SELECT id_modulo FROM modulos_sistema WHERE clave = 'CONSULTA_AFILIACIONES'),
-           p_id_afiliacion, CONCAT('Afiliacion enviada a revision (', v_estatus, ' -> En revision)'));
-END //
-
+-- Admin de Asociación valida (o rechaza) una afiliación de su propia
+-- asociación que esté en Revisión APE.
 CREATE PROCEDURE sp_verificar_afiliacion(
     IN p_id_afiliacion  INT,
     IN p_id_verificador INT,
@@ -412,8 +401,10 @@ CREATE PROCEDURE sp_verificar_afiliacion(
     IN p_observaciones  TEXT
 )
 BEGIN
-    DECLARE v_estatus ENUM('NUEVA','EN_REVISION','VERIFICADO','RECHAZADA');
-    DECLARE v_estatus_nuevo ENUM('NUEVA','EN_REVISION','VERIFICADO','RECHAZADA');
+    DECLARE v_estatus ENUM('REVISION_APE','RECHAZADA','COMPULSA_IEEQ','COMPULSA_INE');
+    DECLARE v_estatus_nuevo ENUM('REVISION_APE','RECHAZADA','COMPULSA_IEEQ','COMPULSA_INE');
+    DECLARE v_asociacion_registro    INT;
+    DECLARE v_asociacion_verificador INT;
 
     DECLARE EXIT HANDLER FOR SQLEXCEPTION
     BEGIN
@@ -421,20 +412,25 @@ BEGIN
         RESIGNAL;
     END;
 
-    SELECT estatus INTO v_estatus FROM afiliaciones WHERE id_afiliacion = p_id_afiliacion;
+    SELECT a.estatus, u.id_asociacion INTO v_estatus, v_asociacion_registro
+    FROM afiliaciones a JOIN usuarios u ON u.id_usuario = a.id_registrador
+    WHERE a.id_afiliacion = p_id_afiliacion;
+
+    SELECT id_asociacion INTO v_asociacion_verificador FROM usuarios WHERE id_usuario = p_id_verificador;
 
     IF v_estatus IS NULL THEN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'La afiliacion no existe';
-    ELSEIF v_estatus != 'EN_REVISION' THEN
+    ELSEIF v_estatus != 'REVISION_APE' THEN
         SIGNAL SQLSTATE '45000'
-        SET MESSAGE_TEXT = 'Solo se pueden verificar afiliaciones que esten En revision';
+        SET MESSAGE_TEXT = 'Solo se pueden validar afiliaciones que esten en Revision APE';
+    ELSEIF v_asociacion_registro IS NULL OR v_asociacion_verificador IS NULL OR v_asociacion_registro != v_asociacion_verificador THEN
+        SIGNAL SQLSTATE '45000'
+        SET MESSAGE_TEXT = 'Solo puedes validar afiliaciones de tu propia asociacion';
     END IF;
 
     START TRANSACTION;
 
-    -- [v5] antes un rechazo regresaba a 'NUEVA'; ahora queda en su
-    -- propio estatus 'RECHAZADA' para dar seguimiento más puntual.
-    SET v_estatus_nuevo = IF(p_decision = 'APROBADO', 'VERIFICADO', 'RECHAZADA');
+    SET v_estatus_nuevo = IF(p_decision = 'APROBADO', 'COMPULSA_IEEQ', 'RECHAZADA');
 
     UPDATE afiliaciones
     SET estatus = v_estatus_nuevo,
@@ -452,18 +448,98 @@ BEGIN
     COMMIT;
 END //
 
+-- El Admin de Asociación regresa a Revisión APE una afiliación de SU
+-- PROPIA asociación que ya estaba en Compulsa IEEQ, para subsanarla antes
+-- de que el Funcionariado IEEQ la incluya en el archivo de compulsa.
+-- Regresa una afiliación de Compulsa IEEQ a Revisión APE, para que la
+-- asociación la subsane. La ejecuta el Admin de Asociación sobre SUS
+-- PROPIOS registros (antes de que IEEQ genere la compulsa), o el
+-- Funcionariado IEEQ sobre cualquier registro (mientras revisa el lote
+-- en afiliaciones_compulsa.pl, en vez de incluir en la compulsa algo
+-- que detectó incorrecto).
+CREATE PROCEDURE sp_regresar_a_revision(
+    IN p_id_afiliacion INT,
+    IN p_id_usuario    INT
+)
+BEGIN
+    DECLARE v_estatus ENUM('REVISION_APE','RECHAZADA','COMPULSA_IEEQ','COMPULSA_INE');
+    DECLARE v_asociacion_registro INT;
+    DECLARE v_tipo_usuario     ENUM('SUPERADMIN','ADMIN_ASOCIACION','FUNCIONARIO_IEEQ','AUXILIAR');
+    DECLARE v_asociacion_usuario  INT;
+
+    SELECT a.estatus, u.id_asociacion INTO v_estatus, v_asociacion_registro
+    FROM afiliaciones a JOIN usuarios u ON u.id_usuario = a.id_registrador
+    WHERE a.id_afiliacion = p_id_afiliacion;
+
+    SELECT tipo_usuario, id_asociacion INTO v_tipo_usuario, v_asociacion_usuario
+    FROM usuarios WHERE id_usuario = p_id_usuario;
+
+    IF v_estatus IS NULL THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'La afiliacion no existe';
+    ELSEIF v_estatus != 'COMPULSA_IEEQ' THEN
+        SIGNAL SQLSTATE '45000'
+        SET MESSAGE_TEXT = 'Solo se pueden regresar a revision afiliaciones en estatus Compulsa IEEQ';
+    ELSEIF v_tipo_usuario = 'ADMIN_ASOCIACION' AND (v_asociacion_registro IS NULL OR v_asociacion_registro != v_asociacion_usuario) THEN
+        SIGNAL SQLSTATE '45000'
+        SET MESSAGE_TEXT = 'Solo puedes regresar a revision afiliaciones de tu propia asociacion';
+    ELSEIF v_tipo_usuario NOT IN ('ADMIN_ASOCIACION', 'FUNCIONARIO_IEEQ') THEN
+        SIGNAL SQLSTATE '45000'
+        SET MESSAGE_TEXT = 'No tienes permiso para regresar afiliaciones a revision';
+    END IF;
+
+    UPDATE afiliaciones
+    SET estatus = 'REVISION_APE', id_usuario_actualizacion = p_id_usuario
+    WHERE id_afiliacion = p_id_afiliacion;
+
+    INSERT INTO bitacora(id_usuario, accion, id_modulo, id_registro_afectado, detalles)
+    VALUES(p_id_usuario, 'REGRESO_REVISION',
+           (SELECT id_modulo FROM modulos_sistema WHERE clave = 'CONSULTA_AFILIACIONES'),
+           p_id_afiliacion, 'Afiliacion regresada a revision (Compulsa IEEQ -> Revision APE)');
+END //
+
+-- El Funcionariado IEEQ marca UNA afiliación en Compulsa IEEQ como ya
+-- incluida en un archivo de compulsa al INE. afiliaciones_compulsa.pl la
+-- llama en un bucle, una vez por cada registro seleccionado, dentro de una
+-- sola transacción Perl (begin_work/commit) para que la selección completa
+-- se procese junto o no se procese nada.
+CREATE PROCEDURE sp_marcar_compulsa_ine(
+    IN p_id_afiliacion INT,
+    IN p_id_usuario    INT
+)
+BEGIN
+    DECLARE v_estatus ENUM('REVISION_APE','RECHAZADA','COMPULSA_IEEQ','COMPULSA_INE');
+
+    SELECT estatus INTO v_estatus FROM afiliaciones WHERE id_afiliacion = p_id_afiliacion;
+
+    IF v_estatus IS NULL THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'La afiliacion no existe';
+    ELSEIF v_estatus != 'COMPULSA_IEEQ' THEN
+        SIGNAL SQLSTATE '45000'
+        SET MESSAGE_TEXT = 'Solo se pueden marcar como Compulsa INE afiliaciones en estatus Compulsa IEEQ';
+    END IF;
+
+    UPDATE afiliaciones
+    SET estatus = 'COMPULSA_INE', id_usuario_actualizacion = p_id_usuario
+    WHERE id_afiliacion = p_id_afiliacion;
+
+    INSERT INTO bitacora(id_usuario, accion, id_modulo, id_registro_afectado, detalles)
+    VALUES(p_id_usuario, 'COMPULSA_GENERADA',
+           (SELECT id_modulo FROM modulos_sistema WHERE clave = 'COMPULSA_AFILIACIONES'),
+           p_id_afiliacion, 'Afiliacion incluida en archivo de compulsa al INE');
+END //
+
 CREATE PROCEDURE sp_eliminar_afiliacion(
     IN p_id_afiliacion INT,
     IN p_id_usuario    INT
 )
 BEGIN
-    DECLARE v_estatus ENUM('NUEVA','EN_REVISION','VERIFICADO','RECHAZADA');
+    DECLARE v_estatus ENUM('REVISION_APE','RECHAZADA','COMPULSA_IEEQ','COMPULSA_INE');
 
     SELECT estatus INTO v_estatus FROM afiliaciones WHERE id_afiliacion = p_id_afiliacion;
 
-    IF v_estatus NOT IN ('NUEVA', 'RECHAZADA') THEN -- [v5]
+    IF v_estatus NOT IN ('REVISION_APE', 'RECHAZADA') THEN
         SIGNAL SQLSTATE '45000'
-        SET MESSAGE_TEXT = 'Solo se pueden eliminar afiliaciones con estatus Nueva afiliacion o Rechazada';
+        SET MESSAGE_TEXT = 'Solo se pueden eliminar afiliaciones con estatus Revision APE o Rechazada';
     END IF;
 
     UPDATE afiliaciones
@@ -477,6 +553,50 @@ BEGIN
            p_id_afiliacion, 'Registro eliminado (soft delete)');
 END //
 
+-- Padrón Electoral: elimina el registro activo y promueve el más reciente
+-- que quede a activo, para que siempre exista exactamente un "Activo".
+CREATE PROCEDURE sp_eliminar_padron(
+    IN p_id_padron  INT,
+    IN p_id_usuario INT
+)
+BEGIN
+    DECLARE v_activo TINYINT;
+    DECLARE v_siguiente INT;
+
+    DECLARE EXIT HANDLER FOR SQLEXCEPTION
+    BEGIN
+        ROLLBACK;
+        RESIGNAL;
+    END;
+
+    SELECT activo INTO v_activo FROM padron_electoral WHERE id_padron = p_id_padron;
+
+    IF v_activo IS NULL THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'El registro no existe';
+    ELSEIF v_activo != 1 THEN
+        SIGNAL SQLSTATE '45000'
+        SET MESSAGE_TEXT = 'Solo se puede eliminar el registro activo del padron';
+    END IF;
+
+    START TRANSACTION;
+
+    DELETE FROM padron_electoral WHERE id_padron = p_id_padron;
+
+    SELECT id_padron INTO v_siguiente FROM padron_electoral
+    ORDER BY fecha_registro DESC LIMIT 1;
+
+    IF v_siguiente IS NOT NULL THEN
+        UPDATE padron_electoral SET activo = 1 WHERE id_padron = v_siguiente;
+    END IF;
+
+    INSERT INTO bitacora(id_usuario, accion, id_modulo, id_registro_afectado, detalles)
+    VALUES(p_id_usuario, 'ELIMINACION',
+           (SELECT id_modulo FROM modulos_sistema WHERE clave = 'PADRON_ELECTORAL'),
+           p_id_padron, 'Registro de padron electoral eliminado');
+
+    COMMIT;
+END //
+
 DELIMITER ;
 
 -- ============================================================
@@ -485,11 +605,11 @@ DELIMITER ;
 
 INSERT INTO asociaciones_politicas (
     nombre, representante_legal, calle, numero, colonia, municipio, codigo_postal,
-    correo_electronico, telefono, fecha_aprobacion, estatus
+    correo_electronico, telefono, sitio_web, fecha_aprobacion, estatus
 ) VALUES (
     'Nuevo Rumbo', 'García Mendoza Luis Alberto',
     'Av. Constitución', '100', 'Centro', 'Querétaro', '76000',
-    'contacto@nuevorumbo.mx', '4421000000', '2024-01-15', 'VIGENTE'
+    'contacto@nuevorumbo.mx', '4421000000', 'https://www.nuevorumbo.mx', '2024-01-15', 'VIGENTE'
 );
 
 INSERT INTO padron_electoral (total_padron, fecha_corte, porcentaje_minimo)
@@ -502,26 +622,30 @@ INSERT INTO usuarios (correo_electronico, contrasena, nombre, apellido_paterno, 
 ('pedro.aux@nuevorumbo.mx', SHA2('12345678',256), 'Pedro',     'Auxiliar',     'Vargas',  'AUXILIAR',         1,    1),
 ('laura.aux@nuevorumbo.mx', SHA2('12345678',256), 'Laura',     'Auxiliar',     'Cruz',    'AUXILIAR',         1,    1);
 
--- [v5] SUPERADMIN tiene control absoluto del SISTEMA (usuarios, permisos,
--- asociaciones, padrón, cédulas, bitácora) pero no de los PROCESOS
--- operativos de afiliación: no registra afiliaciones, y en verificación
--- solo consulta (no aprueba ni rechaza) — ese es el trabajo de la
--- asociación y del Funcionariado IEEQ, respectivamente.
+-- [v6] SUPERADMIN tiene control absoluto del SISTEMA (usuarios, permisos,
+-- asociaciones, padrón, cédulas, bitácora, compulsa) pero no de los
+-- PROCESOS operativos de afiliación: no registra ni verifica afiliaciones.
 INSERT INTO permisos_usuario (id_usuario, id_modulo, nivel)
 SELECT 1, id_modulo,
        CASE clave
            WHEN 'REGISTRO_AFILIACIONES'      THEN 'NINGUNO'
            WHEN 'VERIFICACION_AFILIACIONES'  THEN 'LECTURA'
            WHEN 'CONSULTA_AFILIACIONES'      THEN 'LECTURA'
+           WHEN 'CEDULAS_AFILIACION'         THEN 'LECTURA'
+           WHEN 'COMPULSA_AFILIACIONES'      THEN 'LECTURA'
            ELSE 'ESCRITURA'
        END
 FROM modulos_sistema;
 
+-- [v6] Funcionariado IEEQ ya no verifica afiliaciones (eso lo hace el Admin
+-- de Asociación) — su rol en el flujo es generar el archivo de compulsa al
+-- INE una vez que la asociación ya validó internamente.
 INSERT INTO permisos_usuario (id_usuario, id_modulo, nivel)
 SELECT 2, id_modulo,
        CASE clave
-           WHEN 'VERIFICACION_AFILIACIONES' THEN 'ESCRITURA'
-           WHEN 'CEDULAS_AFILIACION'        THEN 'ESCRITURA'
+           WHEN 'COMPULSA_AFILIACIONES'     THEN 'ESCRITURA'
+           WHEN 'CEDULAS_AFILIACION'        THEN 'LECTURA'
+           WHEN 'VERIFICACION_AFILIACIONES' THEN 'NINGUNO'
            WHEN 'GESTION_USUARIOS'          THEN 'NINGUNO'
            WHEN 'GESTION_PERMISOS'          THEN 'NINGUNO'
            WHEN 'REGISTRO_AFILIACIONES'     THEN 'NINGUNO'
@@ -529,16 +653,20 @@ SELECT 2, id_modulo,
        END
 FROM modulos_sistema;
 
+-- [v6] El Admin de Asociación ahora valida las afiliaciones de su propia
+-- asociación (antes era exclusivo del Funcionariado IEEQ); no ve el listado
+-- de compulsa, eso es exclusivo de SUPERADMIN/Funcionariado IEEQ.
 INSERT INTO permisos_usuario (id_usuario, id_modulo, nivel)
 SELECT 3, id_modulo,
        CASE clave
-           WHEN 'PADRON_ELECTORAL' THEN 'LECTURA'
-           WHEN 'VERIFICACION_AFILIACIONES' THEN 'NINGUNO'
+           WHEN 'PADRON_ELECTORAL'          THEN 'LECTURA'
+           WHEN 'VERIFICACION_AFILIACIONES' THEN 'ESCRITURA'
+           WHEN 'COMPULSA_AFILIACIONES'     THEN 'NINGUNO'
            ELSE 'ESCRITURA'
        END
 FROM modulos_sistema;
 
--- [v5] Un Auxiliar solo puede tener Escritura en Registro de
+-- [v6] Un Auxiliar solo puede tener Escritura en Registro de
 -- Afiliaciones y Lectura en Consulta y Gestión del Listado; el
 -- resto queda en NINGUNO (permisos.pl vuelve a forzar esta misma
 -- regla del lado del servidor, no depende solo de estos datos).
@@ -552,10 +680,17 @@ SELECT id_usuario, id_modulo,
 FROM modulos_sistema
 CROSS JOIN (SELECT id_usuario FROM usuarios WHERE tipo_usuario='AUXILIAR') aux;
 
--- [v5] nombre, apellidos y domicilio en mayúsculas: refleja lo que
+-- [v6] nombre, apellidos y domicilio en mayúsculas: refleja lo que
 -- guarda hoy afiliaciones_nueva.pl (normaliza todo a mayúsculas
 -- antes de insertar). El código CIC ya no se captura (columna NULL
--- en capturas nuevas); domicilio_numero_interior es opcional.
+-- en capturas nuevas); domicilio_numero_interior es opcional. Las
+-- claves de elector y OCR de muestra ya cumplen el formato estructurado
+-- validado por la aplicación (18 y 13 caracteres respectivamente), para
+-- que estos registros sigan siendo editables desde la interfaz.
+-- foto_anverso_ine/foto_reverso_ine/foto_persona/firma van en NULL: son
+-- registros de muestra, no capturas reales, y no existe ningún archivo
+-- físico detrás de un nombre inventado — la pantalla ya maneja el caso
+-- NULL mostrando "(sin archivo)".
 INSERT INTO afiliaciones (
     id_municipio_afiliacion, nombre, apellido_paterno, apellido_materno,
     domicilio_calle, domicilio_numero, domicilio_numero_interior, domicilio_colonia,
@@ -564,22 +699,18 @@ INSERT INTO afiliaciones (
     acepta_afiliacion_libre, acepta_documentos, acepta_no_otro_partido, acepta_aviso_privacidad,
     estatus, id_registrador
 ) VALUES
--- [v5] foto_anverso_ine/foto_reverso_ine/foto_persona/firma van en NULL: son
--- registros de muestra, no capturas reales, y no existe ningún archivo físico
--- detrás de esos nombres — dejar una ruta inventada solo produce un 404 al
--- abrir el detalle. La pantalla ya maneja el caso NULL mostrando "(sin archivo)".
 (14,'JUAN','PÉREZ','GARCÍA','AV. CONSTITUCIÓN','123',NULL,'CENTRO','QUERÉTARO','QUERÉTARO','76000',
- 'PRGJ850315HQRR0100','123456789012','987654321098',
+ 'PRGJHR85031500H100','1234567890123','987654321098',
  NULL,NULL,NULL,NULL,
- 1,1,1,1,'VERIFICADO',4),
+ 1,1,1,1,'COMPULSA_IEEQ',4),
 (14,'MARÍA','LÓPEZ','HERNÁNDEZ','CALLE HIDALGO','45','A','JARDINES','QUERÉTARO','QUERÉTARO','76100',
- 'LOHM900722MQTR0600','234567890123',NULL,
+ 'LOHMXX90072200M600','2345678901234',NULL,
  NULL,NULL,NULL,NULL,
- 1,1,1,1,'EN_REVISION',4),
+ 1,1,1,1,'REVISION_APE',4),
 (16,'CARLOS','RODRÍGUEZ','SILVA','BLVD. BERNARDO QUINTANA','789',NULL,'PRADOS','SAN JUAN DEL RÍO','QUERÉTARO','76800',
- 'ROSC781108HQTD0900','345678901234',NULL,
+ 'ROSCXX78110800H900','3456789012345',NULL,
  NULL,NULL,NULL,NULL,
- 1,1,1,1,'NUEVA',5);
+ 1,1,1,1,'REVISION_APE',5);
 
 INSERT INTO verificaciones_afiliaciones (id_afiliacion, id_verificador, decision, observaciones) VALUES
 (1, 2, 'APROBADO', 'Documentación completa y verificada.');

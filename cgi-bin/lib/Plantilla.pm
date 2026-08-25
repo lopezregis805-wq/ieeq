@@ -8,7 +8,7 @@ use warnings;
 use utf8;                           
 use Exporter 'import';
 
-our @EXPORT_OK = qw(encabezado pie_pagina denegar_acceso);
+our @EXPORT_OK = qw(encabezado pie_pagina denegar_acceso paginacion);
 
 # Mapa clave_modulo -> {enlace, icono, etiqueta}. Un solo lugar
 # para mantener el orden y los textos del menú.
@@ -22,6 +22,7 @@ my @MENU = (
     { clave => 'CONSULTA_AFILIACIONES',    enlace => 'afiliaciones_listado.pl',etiqueta => 'Listado de Afiliados',    icono => 'list-ul' },
     { clave => 'VERIFICACION_AFILIACIONES',enlace => 'afiliaciones_verificar.pl',etiqueta => 'Verificación',          icono => 'check-circle' },
     { clave => 'CEDULAS_AFILIACION',       enlace => 'cedulas.pl',             etiqueta => 'Cédulas',                 icono => 'award' },
+    { clave => 'COMPULSA_AFILIACIONES',    enlace => 'afiliaciones_compulsa.pl',etiqueta => 'Para Compulsa',          icono => 'file-earmark-arrow-up' },
     { clave => 'BITACORA_AUDITORIA',       enlace => 'bitacora.pl',            etiqueta => 'Bitácora',                icono => 'journal-text' },
 );
 
@@ -118,12 +119,63 @@ sub denegar_acceso {
     print pie_pagina();
 }
 
+# paginacion(): controles de paginación homologados, reutilizados por
+# cualquier listado que reciba pagina_actual/total_paginas/base_url.
+# base_url ya debe traer los demás filtros aplicados (ej.
+# "afiliaciones_listado.pl?filtro=TODOS&buscar=..."), aquí solo se le
+# agrega "pagina=N".
+sub paginacion {
+    my (%args) = @_;
+    my $pagina_actual = $args{pagina_actual} // 1;
+    my $total_paginas = $args{total_paginas} // 1;
+    my $total_filas   = $args{total_filas};
+    my $por_pagina    = $args{por_pagina} // 20;
+    my $base_url      = $args{base_url} // '';
+
+    my $sep = ($base_url =~ /\?/) ? '&' : '?';
+
+    # Siempre se dibuja, aunque quepa todo en una sola página — así se ve
+    # que la paginación existe y cuántos registros hay en total, en vez de
+    # desaparecer en silencio cuando un listado todavía tiene pocas filas.
+    my $html = '<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mt-3">';
+    if (defined $total_filas) {
+        if ($total_filas > 0) {
+            my $desde = ($pagina_actual - 1) * $por_pagina + 1;
+            my $hasta = $desde + $por_pagina - 1;
+            $hasta = $total_filas if $hasta > $total_filas;
+            $html .= qq(<small class="text-muted">Mostrando $desde–$hasta de $total_filas</small>);
+        } else {
+            $html .= '<small class="text-muted">Sin registros</small>';
+        }
+    } else {
+        $html .= '<span></span>';
+    }
+
+    $html .= '<nav aria-label="Paginación"><ul class="pagination pagination-sm mb-0">';
+
+    my $anterior = $pagina_actual - 1;
+    my $clase_anterior = $pagina_actual <= 1 ? 'disabled' : '';
+    $html .= qq(<li class="page-item $clase_anterior"><a class="page-link" href="$base_url${sep}pagina=$anterior">Anterior</a></li>);
+
+    for my $p (1 .. $total_paginas) {
+        my $activo = ($p == $pagina_actual) ? 'active' : '';
+        $html .= qq(<li class="page-item $activo"><a class="page-link" href="$base_url${sep}pagina=$p">$p</a></li>);
+    }
+
+    my $siguiente = $pagina_actual + 1;
+    my $clase_siguiente = $pagina_actual >= $total_paginas ? 'disabled' : '';
+    $html .= qq(<li class="page-item $clase_siguiente"><a class="page-link" href="$base_url${sep}pagina=$siguiente">Siguiente</a></li>);
+
+    $html .= '</ul></nav></div>';
+    return $html;
+}
+
 sub pie_pagina {
     return <<'HTML';
     </div>
   </main>
 </div>
-<script src="https://cdn.jsdelivr.net/npm/bootstrap\@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 <script src="public/js/sidebar.js"></script>
 </body>
 </html>

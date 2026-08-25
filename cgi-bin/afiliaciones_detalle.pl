@@ -60,13 +60,15 @@ unless ($r && $autorizado) {
     exit;
 }
 
-my %color_estatus = (NUEVA => 'secondary', EN_REVISION => 'warning', VERIFICADO => 'success', RECHAZADA => 'danger');
+my %color_estatus = (REVISION_APE => 'warning', RECHAZADA => 'danger', COMPULSA_IEEQ => 'primary', COMPULSA_INE => 'success');
+my %etiqueta_estatus = (REVISION_APE => 'Revisión APE', RECHAZADA => 'Rechazada', COMPULSA_IEEQ => 'Compulsa IEEQ', COMPULSA_INE => 'Compulsa INE');
 my $color = $color_estatus{ $r->{estatus} } // 'secondary';
+my $etiqueta = $etiqueta_estatus{ $r->{estatus} } // $r->{estatus};
 
 print qq(
 <div class="d-flex justify-content-between align-items-center mb-3">
   <h5 class="mb-0">$r->{nombre} $r->{apellido_paterno} @{[ $r->{apellido_materno} // '' ]}</h5>
-  <span class="badge bg-$color-subtle text-$color-emphasis fs-6">$r->{estatus}</span>
+  <span class="badge bg-$color-subtle text-$color-emphasis fs-6">$etiqueta</span>
 </div>
 
 <div class="row g-3">

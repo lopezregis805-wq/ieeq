@@ -25,7 +25,9 @@ use DB qw(conectar);
 use Rutas qw($RUTA_UPLOADS);
 use Auth qw(iniciar_sesion requerir_sesion tiene_permiso obtener_texto_sesion);
 use Bitacora qw(registrar);
-use Plantilla qw(encabezado pie_pagina denegar_acceso);
+use Plantilla qw(encabezado pie_pagina denegar_acceso paginacion);
+
+my $POR_PAGINA = 20;
 
 my $cgi = CGI->new;
 binmode(STDOUT, ":encoding(UTF-8)");   # lo que imprimimos tambien debe salir en UTF-8
@@ -89,6 +91,7 @@ if ($accion eq 'guardar' && $cgi->request_method eq 'POST') {
     my $cp           = trim($cgi->param('codigo_postal'));
     my $correo       = trim($cgi->param('correo_electronico'));
     my $telefono     = trim($cgi->param('telefono'));
+    my $sitio_web    = trim($cgi->param('sitio_web'));
     my $fecha_aprob  = $cgi->param('fecha_aprobacion') || undef;
     my $estatus      = $cgi->param('estatus') || 'VIGENTE';
     my $fecha_perdida= $cgi->param('fecha_perdida_registro') || undef;
@@ -131,11 +134,11 @@ if ($accion eq 'guardar' && $cgi->request_method eq 'POST') {
             # --- edición ---
             my @campos = (
                 $nombre, $representante, $calle, $numero, $colonia, $municipio, $cp,
-                $correo, $telefono, $fecha_aprob, $estatus, $fecha_perdida,
+                $correo, $telefono, $sitio_web, $fecha_aprob, $estatus, $fecha_perdida,
             );
             my $sql = 'UPDATE asociaciones_politicas SET
                         nombre=?, representante_legal=?, calle=?, numero=?, colonia=?,
-                        municipio=?, codigo_postal=?, correo_electronico=?, telefono=?,
+                        municipio=?, codigo_postal=?, correo_electronico=?, telefono=?, sitio_web=?,
                         fecha_aprobacion=?, estatus=?, fecha_perdida_registro=?';
             if ($ruta_emblema) { $sql .= ', emblema=?'; push @campos, $ruta_emblema; }
             $sql .= ' WHERE id_asociacion=?';
@@ -151,12 +154,12 @@ if ($accion eq 'guardar' && $cgi->request_method eq 'POST') {
             $dbh->do(
                 'INSERT INTO asociaciones_politicas
                     (nombre, representante_legal, calle, numero, colonia, municipio,
-                     codigo_postal, correo_electronico, telefono, fecha_aprobacion,
+                     codigo_postal, correo_electronico, telefono, sitio_web, fecha_aprobacion,
                      estatus, fecha_perdida_registro, emblema)
-                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
+                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
                 undef,
                 $nombre, $representante, $calle, $numero, $colonia, $municipio, $cp,
-                $correo, $telefono, $fecha_aprob, $estatus, $fecha_perdida, $ruta_emblema,
+                $correo, $telefono, $sitio_web, $fecha_aprob, $estatus, $fecha_perdida, $ruta_emblema,
             );
             my $nuevo_id = $dbh->last_insert_id(undef, undef, 'asociaciones_politicas', undef);
 
@@ -164,7 +167,7 @@ if ($accion eq 'guardar' && $cgi->request_method eq 'POST') {
                       clave_modulo => 'GESTION_ASOCIACIONES', id_registro_afectado => $nuevo_id,
                       detalles => "Alta de asociación: $nombre", ip => $cgi->remote_addr);
         }
-        print $cgi->redirect('asociaciones.pl');
+        print $cgi->redirect('asociaciones.pl?guardado=1&nombre=' . $cgi->escape($nombre));
         exit;
     }
     $accion = $cgi->param('id_asociacion') ? 'editar' : 'nuevo'; # regresa al formulario con errores
@@ -200,7 +203,9 @@ if (@errores) {
 if ($accion eq 'nuevo' || $accion eq 'editar') {
     mostrar_formulario($dbh, $cgi);
 } else {
-    mostrar_listado($dbh, $rol_sesion, $id_asociacion_sesion);
+    my $pagina = int($cgi->param('pagina') // 1);
+    $pagina = 1 if $pagina < 1;
+    mostrar_listado($dbh, $rol_sesion, $id_asociacion_sesion, $pagina);
 }
 
 print pie_pagina();
@@ -210,15 +215,28 @@ print pie_pagina();
 # ============================================================
 
 sub mostrar_listado {
-    my ($dbh, $rol_sesion, $id_asociacion_sesion) = @_;
+    my ($dbh, $rol_sesion, $id_asociacion_sesion, $pagina) = @_;
+    $pagina //= 1;
 
-    my $sql = 'SELECT * FROM asociaciones_politicas';
+    if ($cgi->param('guardado')) {
+        my $nombre_guardado = $cgi->escapeHTML($cgi->param('nombre') // '');
+        my $detalle = length($nombre_guardado) ? " de $nombre_guardado" : '';
+        print qq(<div class="alert alert-success">Datos$detalle guardados correctamente.</div>);
+    }
+
+    my $where = '1=1';
     my @params;
     if ($rol_sesion eq 'ADMIN_ASOCIACION') {
-        $sql .= ' WHERE id_asociacion = ?';
+        $where = 'id_asociacion = ?';
         push @params, $id_asociacion_sesion;
     }
-    $sql .= ' ORDER BY nombre';
+
+    my ($total_filas) = $dbh->selectrow_array("SELECT COUNT(*) FROM asociaciones_politicas WHERE $where", undef, @params);
+    my $total_paginas = $total_filas ? int(($total_filas + $POR_PAGINA - 1) / $POR_PAGINA) : 1;
+    $pagina = $total_paginas if $pagina > $total_paginas;
+    my $offset = ($pagina - 1) * $POR_PAGINA;
+
+    my $sql = "SELECT * FROM asociaciones_politicas WHERE $where ORDER BY nombre LIMIT $POR_PAGINA OFFSET $offset";
 
     my $sth = $dbh->prepare($sql);
     $sth->execute(@params);
@@ -277,6 +295,7 @@ sub mostrar_listado {
         print '<tr><td colspan="5" class="text-center text-muted py-4">No hay asociaciones registradas.</td></tr>';
     }
     print '</tbody></table></div></div>';
+    print paginacion(pagina_actual => $pagina, total_paginas => $total_paginas, total_filas => $total_filas, por_pagina => $POR_PAGINA, base_url => 'asociaciones.pl');
 }
 
 sub mostrar_formulario {
@@ -322,6 +341,11 @@ sub mostrar_formulario {
         <div class="col-md-3">
           <label class="form-label">Teléfono</label>
           <input class="form-control" name="telefono" value="@{[ $a->{telefono} // '' ]}">
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">Sitio web</label>
+          <input class="form-control" type="url" name="sitio_web" placeholder="https://..." value="@{[ $a->{sitio_web} // '' ]}">
+          <small class="text-muted">Se muestra en el aviso de privacidad de la cédula.</small>
         </div>
         <div class="col-md-3">
           <label class="form-label">Fecha de aprobación</label>
